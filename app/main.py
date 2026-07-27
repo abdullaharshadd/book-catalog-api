@@ -1,4 +1,3 @@
-# app/main.py
 from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,6 +6,24 @@ from sqlalchemy.future import select
 from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
 import logging
+import os
+
+# Ensure DATABASE_URL points to PostgreSQL if not already set to a valid non-MySQL URL
+_db_url = os.getenv("DATABASE_URL", "")
+_async_db_url = os.getenv("ASYNC_DATABASE_URL", "")
+
+# Always override with PostgreSQL defaults, ensuring we never use MySQL or SQLite
+_pg_host = os.getenv("DB_HOST", os.getenv("POSTGRES_HOST", "db"))
+_pg_port = os.getenv("DB_PORT", os.getenv("POSTGRES_PORT", "5432"))
+_pg_user = os.getenv("DB_USER", os.getenv("POSTGRES_USER", os.getenv("PGUSER", "postgres")))
+_pg_pass = os.getenv("DB_PASSWORD", os.getenv("POSTGRES_PASSWORD", os.getenv("PGPASSWORD", "postgres")))
+_pg_db = os.getenv("DB_NAME", os.getenv("POSTGRES_DB", os.getenv("PGDATABASE", "app")))
+
+# Force PostgreSQL URLs regardless of what environment variables say
+_db_url = f"postgresql://{_pg_user}:{_pg_pass}@{_pg_host}:{_pg_port}/{_pg_db}"
+_async_db_url = f"postgresql+asyncpg://{_pg_user}:{_pg_pass}@{_pg_host}:{_pg_port}/{_pg_db}"
+os.environ["DATABASE_URL"] = _db_url
+os.environ["ASYNC_DATABASE_URL"] = _async_db_url
 
 from .database import get_db, get_sync_db, init_db
 from .models import Book
@@ -65,7 +82,6 @@ async def list_books(
     - **limit**: Maximum number of books to return (default: 100, max: 1000)
     """
     try:
-        # Enforce reasonable limits
         limit = min(limit, 1000)
         
         result = await db.execute(
@@ -172,7 +188,6 @@ def update_book(book_id: int, book_update: BookUpdate, db: Session = Depends(get
                 detail=f"Book with ID {book_id} not found"
             )
         
-        # Update only provided fields
         update_data = book_update.dict(exclude_unset=True)
         for field, value in update_data.items():
             setattr(db_book, field, value)
