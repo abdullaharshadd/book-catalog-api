@@ -12,17 +12,18 @@ import os
 _db_url = os.getenv("DATABASE_URL", "")
 _async_db_url = os.getenv("ASYNC_DATABASE_URL", "")
 
-# If DATABASE_URL is empty or points to MySQL/SQLite, override with PostgreSQL defaults
-if not _db_url or "3306" in _db_url or _db_url.startswith("sqlite") or _db_url.startswith("mysql"):
-    _pg_host = os.getenv("DB_HOST", os.getenv("POSTGRES_HOST", "db"))
-    _pg_port = os.getenv("DB_PORT", os.getenv("POSTGRES_PORT", "5432"))
-    _pg_user = os.getenv("DB_USER", os.getenv("POSTGRES_USER", os.getenv("PGUSER", "postgres")))
-    _pg_pass = os.getenv("DB_PASSWORD", os.getenv("POSTGRES_PASSWORD", os.getenv("PGPASSWORD", "postgres")))
-    _pg_db = os.getenv("DB_NAME", os.getenv("POSTGRES_DB", os.getenv("PGDATABASE", "app")))
-    _db_url = f"postgresql://{_pg_user}:{_pg_pass}@{_pg_host}:{_pg_port}/{_pg_db}"
-    _async_db_url = f"postgresql+asyncpg://{_pg_user}:{_pg_pass}@{_pg_host}:{_pg_port}/{_pg_db}"
-    os.environ["DATABASE_URL"] = _db_url
-    os.environ["ASYNC_DATABASE_URL"] = _async_db_url
+# Always override with PostgreSQL defaults, ensuring we never use MySQL or SQLite
+_pg_host = os.getenv("DB_HOST", os.getenv("POSTGRES_HOST", "db"))
+_pg_port = os.getenv("DB_PORT", os.getenv("POSTGRES_PORT", "5432"))
+_pg_user = os.getenv("DB_USER", os.getenv("POSTGRES_USER", os.getenv("PGUSER", "postgres")))
+_pg_pass = os.getenv("DB_PASSWORD", os.getenv("POSTGRES_PASSWORD", os.getenv("PGPASSWORD", "postgres")))
+_pg_db = os.getenv("DB_NAME", os.getenv("POSTGRES_DB", os.getenv("PGDATABASE", "app")))
+
+# Force PostgreSQL URLs regardless of what environment variables say
+_db_url = f"postgresql://{_pg_user}:{_pg_pass}@{_pg_host}:{_pg_port}/{_pg_db}"
+_async_db_url = f"postgresql+asyncpg://{_pg_user}:{_pg_pass}@{_pg_host}:{_pg_port}/{_pg_db}"
+os.environ["DATABASE_URL"] = _db_url
+os.environ["ASYNC_DATABASE_URL"] = _async_db_url
 
 from .database import get_db, get_sync_db, init_db
 from .models import Book
