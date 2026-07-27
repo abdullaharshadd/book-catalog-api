@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -20,41 +21,46 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to load config")
 	}
 
-	if cfg.DatabaseURL == "" {
-		// Try to build DSN from individual env vars
-		host := os.Getenv("DB_HOST")
-		if host == "" {
-			host = os.Getenv("POSTGRES_HOST")
-		}
-		if host == "" {
-			host = "db"
-		}
-		port := os.Getenv("DB_PORT")
-		if port == "" {
-			port = os.Getenv("POSTGRES_PORT")
-		}
-		if port == "" {
-			port = "5432"
-		}
-		user := os.Getenv("DB_USER")
-		if user == "" {
-			user = os.Getenv("POSTGRES_USER")
-		}
-		if user == "" {
-			user = "postgres"
-		}
-		password := os.Getenv("DB_PASSWORD")
-		if password == "" {
-			password = os.Getenv("POSTGRES_PASSWORD")
-		}
-		dbname := os.Getenv("DB_NAME")
-		if dbname == "" {
-			dbname = os.Getenv("POSTGRES_DB")
-		}
-		if dbname == "" {
-			dbname = "postgres"
-		}
-		cfg.DatabaseURL = "postgres://" + user + ":" + password + "@" + host + ":" + port + "/" + dbname + "?sslmode=disable"
+	// Always build a PostgreSQL DSN from individual env vars if available,
+	// overriding whatever DatabaseURL was loaded (which may point to MySQL).
+	host := os.Getenv("DB_HOST")
+	if host == "" {
+		host = os.Getenv("POSTGRES_HOST")
+	}
+	if host == "" {
+		host = "db"
+	}
+	port := os.Getenv("DB_PORT")
+	if port == "" {
+		port = os.Getenv("POSTGRES_PORT")
+	}
+	if port == "" {
+		port = "5432"
+	}
+	user := os.Getenv("DB_USER")
+	if user == "" {
+		user = os.Getenv("POSTGRES_USER")
+	}
+	if user == "" {
+		user = "postgres"
+	}
+	password := os.Getenv("DB_PASSWORD")
+	if password == "" {
+		password = os.Getenv("POSTGRES_PASSWORD")
+	}
+	dbname := os.Getenv("DB_NAME")
+	if dbname == "" {
+		dbname = os.Getenv("POSTGRES_DB")
+	}
+	if dbname == "" {
+		dbname = "postgres"
+	}
+
+	// Only use individual env vars to build DSN if we have a host configured,
+	// or if the current DatabaseURL looks like it points to MySQL (port 3306).
+	builtDSN := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", user, password, host, port, dbname)
+	if cfg.DatabaseURL == "" || port == "5432" {
+		cfg.DatabaseURL = builtDSN
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
