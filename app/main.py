@@ -1,4 +1,3 @@
-# app/main.py
 from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,6 +6,7 @@ from sqlalchemy.future import select
 from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
 import logging
+import os
 
 from .database import get_db, get_sync_db, init_db
 from .models import Book
