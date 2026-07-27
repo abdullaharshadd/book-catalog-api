@@ -21,9 +21,9 @@ import (
 // observe identical validation feedback.
 
 const (
-	maxTitleLen   = 255
-	maxAuthorLen  = 255
-	maxSummaryLen = 2000
+	maxTitleLen      = 255
+	maxAuthorLen     = 255
+	maxSummaryLen    = 2000
 	minPublishedYear = 1000
 )
 
@@ -290,7 +290,7 @@ func (b *BookUpdate) Validate() error {
 // JSON `null` rather than being dropped from the object — matching the
 // Pydantic model where summary is always present in the serialised output.
 type BookResponse struct {
-	ID            int     `json:"id"`
+	ID            int64   `json:"id"`
 	Title         string  `json:"title"`
 	Author        string  `json:"author"`
 	PublishedYear int     `json:"published_year"`
