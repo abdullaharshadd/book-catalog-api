@@ -60,7 +60,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	var db interface{ Close() error }
+	var db *internal.DB
 	for i := 0; i < 10; i++ {
 		db, err = internal.NewDB(ctx, cfg.DatabaseURL)
 		if err == nil {
