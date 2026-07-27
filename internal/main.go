@@ -1,8 +1,450 @@
-{
-  "code": "package internal\n\nimport (\n\t\"context\"\n\t\"database/sql\"\n\t\"encoding/json\"\n\t\"errors\"\n\t\"fmt\"\n\t\"log\"\n\t\"net/http\"\n\t\"strconv\"\n\t\"strings\"\n\n\t\"github.com/go-chi/chi/v5\"\n\t\"github.com/go-chi/chi/v5/middleware\"\n)\n\n// MIGRATION_NOTE: The Python source was a FastAPI app defined in one file that\n// mixed async and sync SQLAlchemy sessions. In Go there is a single *DB\n// connection pool (see internal/database.go); the async/sync distinction is\n// irrelevant because database/sql is concurrency-safe and context-driven.\n//\n// FastAPI's automatic OpenAPI docs (/docs, /redoc) have no standard-library\n// Go equivalent and are intentionally NOT reproduced. If interactive docs are\n// required, generate an OpenAPI spec separately (e.g. with swaggo) — this is a\n// deliberate omission, not an oversight.\n//\n// The custom HTTPException handler is replaced by writeError, which emits the\n// same {\"detail\": ...} JSON shape the Python handler produced.\n\n// bookStore is the persistence contract the HTTP handlers depend on. Defining\n// it as an interface keeps the handlers testable and decoupled from the\n// concrete *DB implementation.\ntype bookStore interface {\n\tList(ctx context.Context, skip, limit int) ([]Book, error)\n\tGet(ctx context.Context, id int64) (Book, bool, error)\n\tCreate(ctx context.Context, b *Book) error\n\tUpdate(ctx context.Context, b *Book) error\n\tDelete(ctx context.Context, id int64) (bool, error)\n}\n\n// errDuplicate signals a unique-constraint violation (title+author already\n// exists). Repository implementations return this so handlers can map it to a\n// 400 response without inspecting driver-specific error strings.\nvar errDuplicate = errors.New(\"book with this title and author already exists\")\n\n// BookRepository is the default bookStore backed by a *DB connection pool.\ntype BookRepository struct {\n\tdb *DB\n}\n\n// NewBookRepository constructs a BookRepository over the given database pool.\nfunc NewBookRepository(db *DB) *BookRepository {\n\treturn &BookRepository{db: db}\n}\n\n// List returns up to limit books, skipping the first skip rows, ordered by id.\nfunc (r *BookRepository) List(ctx context.Context, skip, limit int) ([]Book, error) {\n\tconst q = `SELECT id, title, author, published_year, summary\n\t           FROM books ORDER BY id OFFSET $1 LIMIT $2`\n\tbooks := []Book{}\n\tif err := r.db.SelectContext(ctx, &books, q, skip, limit); err != nil {\n\t\treturn nil, fmt.Errorf(\"list books: %w\", err)\n\t}\n\treturn books, nil\n}\n\n// Get returns the book with the given id. The bool is false when no such book\n// exists (mirroring SQLAlchemy's scalar_one_or_none -> None).\nfunc (r *BookRepository) Get(ctx context.Context, id int64) (Book, bool, error) {\n\tconst q = `SELECT id, title, author, published_year, summary\n\t           FROM books WHERE id = $1`\n\tvar b Book\n\tif err := r.db.GetContext(ctx, &b, q, id); err != nil {\n\t\tif errors.Is(err, sql.ErrNoRows) {\n\t\t\treturn Book{}, false, nil\n\t\t}\n\t\treturn Book{}, false, fmt.Errorf(\"get book %d: %w\", id, err)\n\t}\n\treturn b, true, nil\n}\n\n// Create inserts a new book and populates its ID via RETURNING. A unique\n// constraint violation is surfaced as errDuplicate.\nfunc (r *BookRepository) Create(ctx context.Context, b *Book) error {\n\tconst q = `INSERT INTO books (title, author, published_year, summary)\n\t           VALUES ($1, $2, $3, $4) RETURNING id`\n\terr := r.db.QueryRowContext(ctx, q, b.Title, b.Author, b.PublishedYear, b.Summary).Scan(&b.ID)\n\tif err != nil {\n\t\tif isUniqueViolation(err) {\n\t\t\treturn errDuplicate\n\t\t}\n\t\treturn fmt.Errorf(\"create book: %w\", err)\n\t}\n\treturn nil\n}\n\n// Update persists all mutable fields of an existing book. A unique constraint\n// violation is surfaced as errDuplicate.\nfunc (r *BookRepository) Update(ctx context.Context, b *Book) error {\n\tconst q = `UPDATE books\n\t           SET title = $1, author = $2, published_year = $3, summary = $4\n\t           WHERE id = $5`\n\t_, err := r.db.ExecContext(ctx, q, b.Title, b.Author, b.PublishedYear, b.Summary, b.ID)\n\tif err != nil {\n\t\tif isUniqueViolation(err) {\n\t\t\treturn errDuplicate\n\t\t}\n\t\treturn fmt.Errorf(\"update book %d: %w\", b.ID, err)\n\t}\n\treturn nil\n}\n\n// Delete removes a book by id, returning whether a row was actually deleted.\nfunc (r *BookRepository) Delete(ctx context.Context, id int64) (bool, error) {\n\tconst q = `DELETE FROM books WHERE id = $1`\n\tres, err := r.db.ExecContext(ctx, q, id)\n\tif err != nil {\n\t\treturn false, fmt.Errorf(\"delete book %d: %w\", id, err)\n\t}\n\tn, err := res.RowsAffected()\n\tif err != nil {\n\t\treturn false, fmt.Errorf(\"delete book %d rows affected: %w\", id, err)\n\t}\n\treturn n > 0, nil\n}\n\n// isUniqueViolation reports whether err represents a PostgreSQL unique_violation\n// (SQLSTATE 23505).\n//\n// MIGRATION_NOTE: SQLAlchemy raised IntegrityError generically; PostgreSQL is\n// more precise. We match SQLSTATE 23505 without importing pgconn directly by\n// checking for an error exposing an SQLState() string method, falling back to a\n// message substring check. If you already import github.com/jackc/pgx/v5/pgconn\n// elsewhere, prefer errors.As with *pgconn.PgError for robustness.\nfunc isUniqueViolation(err error) bool {\n\tif err == nil {\n\t\treturn false\n\t}\n\ttype sqlStater interface{ SQLState() string }\n\tvar ss sqlStater\n\tif errors.As(err, &ss) {\n\t\treturn ss.SQLState() == \"23505\"\n\t}\n\treturn strings.Contains(err.Error(), \"23505\") ||\n\t\tstrings.Contains(strings.ToLower(err.Error()), \"unique constraint\")\n}\n\n// BookHandler holds the dependencies required to serve the book catalog HTTP\n// API. Construct it via NewBookHandler.\ntype BookHandler struct {\n\tstore bookStore\n}\n\n// NewBookHandler constructs a BookHandler backed by the given store.\nfunc NewBookHandler(store bookStore) *BookHandler {\n\treturn &BookHandler{store: store}\n}\n\n// toResponse maps a Book domain struct onto the public BookResponse DTO using\n// an explicit whitelist so no internal fields can leak into the API contract.\nfunc toResponse(b Book) BookResponse {\n\treturn NewBookResponse(b)\n}\n\n// writeJSON serializes v as JSON with the given status code.\nfunc writeJSON(w http.ResponseWriter, status int, v any) {\n\tw.Header().Set(\"Content-Type\", \"application/json\")\n\tw.WriteHeader(status)\n\tif v == nil {\n\t\treturn\n\t}\n\tif err := json.NewEncoder(w).Encode(v); err != nil {\n\t\tlog.Printf(\"error encoding response: %v\", err)\n\t}\n}\n\n// writeError emits the {\"detail\": ...} error envelope the Python custom\n// exception handler produced, preserving wire compatibility for clients.\nfunc writeError(w http.ResponseWriter, status int, detail string) {\n\twriteJSON(w, status, map[string]string{\"detail\": detail})\n}\n\n// Root serves GET / — API welcome message, version and docs URL.\nfunc (h *BookHandler) Root(w http.ResponseWriter, r *http.Request) {\n\twriteJSON(w, http.StatusOK, map[string]string{\n\t\t\"message\":  \"Welcome to Book Catalog API\",\n\t\t\"version\":  \"1.0.0\",\n\t\t\"docs_url\": \"/docs\",\n\t})\n}\n\n// HealthCheck serves GET /health.\nfunc (h *BookHandler) HealthCheck(w http.ResponseWriter, r *http.Request) {\n\twriteJSON(w, http.StatusOK, map[string]string{\n\t\t\"status\":  \"healthy\",\n\t\t\"service\": \"book-catalog-api\",\n\t})\n}\n\n// ListBooks serves GET /books/ with skip/limit pagination (limit capped 1000).\nfunc (h *BookHandler) ListBooks(w http.ResponseWriter, r *http.Request) {\n\tskip := parseIntQuery(r, \"skip\", 0)\n\tif skip < 0 {\n\t\tskip = 0\n\t}\n\tlimit := parseIntQuery(r, \"limit\", 100)\n\tif limit > 1000 {\n\t\tlimit = 1000\n\t}\n\tif limit < 0 {\n\t\tlimit = 0\n\t}\n\n\tbooks, err := h.store.List(r.Context(), skip, limit)\n\tif err != nil {\n\t\tlog.Printf(\"error retrieving books: %v\", err)\n\t\twriteError(w, http.StatusInternalServerError, \"Internal server error while retrieving books\")\n\t\treturn\n\t}\n\n\tresp := make([]BookResponse, 0, len(books))\n\tfor _, b := range books {\n\t\tresp = append(resp, toResponse(b))\n\t}\n\tlog.Printf(\"Retrieved %d books (skip=%d, limit=%d)\", len(books), skip, limit)\n\twriteJSON(w, http.StatusOK, resp)\n}\n\n// GetBook serves GET /books/{book_id}.\nfunc (h *BookHandler) GetBook(w http.ResponseWriter, r *http.Request) {\n\tid, ok := parseIDParam(w, r)\n\tif !ok {\n\t\treturn\n\t}\n\n\tbook, found, err := h.store.Get(r.Context(), id)\n\tif err != nil {\n\t\tlog.Printf(\"error retrieving book %d: %v\", id, err)\n\t\twriteError(w, http.StatusInternalServerError, \"Internal server error while retrieving book\")\n\t\treturn\n\t}\n\tif !found {\n\t\tlog.Printf(\"Book with ID %d not found\", id)\n\t\twriteError(w, http.StatusNotFound, fmt.Sprintf(\"Book with ID %d not found\", id))\n\t\treturn\n\t}\n\tlog.Printf(\"Retrieved book: %s\", book.Title)\n\twriteJSON(w, http.StatusOK, toResponse(book))\n}\n\n// CreateBook serves POST /books/ — returns 201, or 400 on duplicate.\nfunc (h *BookHandler) CreateBook(w http.ResponseWriter, r *http.Request) {\n\tvar in BookCreate\n\tif err := json.NewDecoder(r.Body).Decode(&in); err != nil {\n\t\twriteError(w, http.StatusUnprocessableEntity, \"invalid request body\")\n\t\treturn\n\t}\n\tif err := in.Validate(); err != nil {\n\t\twriteError(w, http.StatusUnprocessableEntity, err.Error())\n\t\treturn\n\t}\n\n\tbook := Book{\n\t\tTitle:         in.Title,\n\t\tAuthor:        in.Author,\n\t\tPublishedYear: in.PublishedYear,\n\t\tSummary:       in.Summary,\n\t}\n\n\tif err := h.store.Create(r.Context(), &book); err != nil {\n\t\tif errors.Is(err, errDuplicate) {\n\t\t\tlog.Printf(\"integrity error creating book: %v\", err)\n\t\t\twriteError(w, http.StatusBadRequest, \"Book with this title and author already exists\")\n\t\t\treturn\n\t\t}\n\t\tlog.Printf(\"error creating book: %v\", err)\n\t\twriteError(w, http.StatusInternalServerError, \"Internal server error while creating book\")\n\t\treturn\n\t}\n\tlog.Printf(\"Created new book: %s by %s\", book.Title, book.Author)\n\twriteJSON(w, http.StatusCreated, toResponse(book))\n}\n\n// UpdateBook serves PUT /books/{book_id} — partial update; 404 if not found,\n// 400 on integrity conflict.\nfunc (h *BookHandler) UpdateBook(w http.ResponseWriter, r *http.Request) {\n\tid, ok := parseIDParam(w, r)\n\tif !ok {\n\t\treturn\n\t}\n\n\tvar upd BookUpdate\n\tif err := json.NewDecoder(r.Body).Decode(&upd); err != nil {\n\t\twriteError(w, http.StatusUnprocessableEntity, \"invalid request body\")\n\t\treturn\n\t}\n\tif err := upd.Validate(); err != nil {\n\t\twriteError(w, http.StatusUnprocessableEntity, err.Error())\n\t\treturn\n\t}\n\n\tbook, found, err := h.store.Get(r.Context(), id)\n\tif err != nil {\n\t\tlog.Printf(\"error updating book %d: %v\", id, err)\n\t\twriteError(w, http.StatusInternalServerError, \"Internal server error while updating book\")\n\t\treturn\n\t}\n\tif !found {\n\t\tlog.Printf(\"Book with ID %d not found for update\", id)\n\t\twriteError(w, http.StatusNotFound, fmt.Sprintf(\"Book with ID %d not found\", id))\n\t\treturn\n\t}\n\n\t// MIGRATION_NOTE: exclude_unset semantics — only fields present in the\n\t// request body are merged onto the loaded book. There is no id branch:\n\t// the path parameter is authoritative. We then persist and serialize the\n\t// in-memory merged struct directly (no re-Get).\n\tupd.ApplyTo(&book)\n\n\tif err := h.store.Update(r.Context(), &book); err != nil {\n\t\tif errors.Is(err, errDuplicate) {\n\t\t\tlog.Printf(\"integrity error updating book: %v\", err)\n\t\t\twriteError(w, http.StatusBadRequest, \"Book with this title and author already exists\")\n\t\t\treturn\n\t\t}\n\t\tlog.Printf(\"error updating book %d: %v\", id, err)\n\t\twriteError(w, http.StatusInternalServerError, \"Internal server error while updating book\")\n\t\treturn\n\t}\n\tlog.Printf(\"Updated book: %s\", book.Title)\n\twriteJSON(w, http.StatusOK, toResponse(book))\n}\n\n// DeleteBook serves DELETE /books/{book_id} — 204 on success, 404 if missing.\nfunc (h *BookHandler) DeleteBook(w http.ResponseWriter, r *http.Request) {\n\tid, ok := parseIDParam(w, r)\n\tif !ok {\n\t\treturn\n\t}\n\n\tdeleted, err := h.store.Delete(r.Context(), id)\n\tif err != nil {\n\t\tlog.Printf(\"error deleting book %d: %v\", id, err)\n\t\twriteError(w, http.StatusInternalServerError, \"Internal server error while deleting book\")\n\t\treturn\n\t}\n\tif !deleted {\n\t\tlog.Printf(\"Book with ID %d not found for deletion\", id)\n\t\twriteError(w, http.StatusNotFound, fmt.Sprintf(\"Book with ID %d not found\", id))\n\t\treturn\n\t}\n\tlog.Printf(\"Deleted book %d\", id)\n\tw.WriteHeader(http.StatusNoContent)\n}\n\n// parseIntQuery parses a query parameter as an int, returning def when absent\n// or unparseable.\nfunc parseIntQuery(r *http.Request, key string, def int) int {\n\traw := r.URL.Query().Get(key)\n\tif raw == \"\" {\n\t\treturn def\n\t}\n\tv, err := strconv.Atoi(raw)\n\tif err != nil {\n\t\treturn def\n\t}\n\treturn v\n}\n\n// parseIDParam extracts and validates the {book_id} path parameter, writing a\n// 404 (matching FastAPI's behaviour for a non-integer path segment on an int\n// route) and returning ok=false on failure.\nfunc parseIDParam(w http.ResponseWriter, r *http.Request) (int64, bool) {\n\traw := chi.URLParam(r, \"book_id\")\n\tid, err := strconv.ParseInt(raw, 10, 64)\n\tif err != nil {\n\t\twriteError(w, http.StatusNotFound, fmt.Sprintf(\"Book with ID %s not found\", raw))\n\t\treturn 0, false\n\t}\n\treturn id, true\n}\n\n// defaultHandler is package-level so buildRouter can wire routes without an\n// injected store. It is initialized by SetHandler during application startup.\n//\n// MIGRATION_NOTE: buildRouter has a fixed signature (func() http.Handler)\n// called by cmd/server/main.go, so it cannot accept dependencies directly.\n// The entry point should call SetHandler(NewBookHandler(NewBookRepository(db)))\n// after opening the DB pool. If no handler has been set, buildRouter falls\n// back to a store that returns 500s, making the misconfiguration obvious\n// rather than panicking at request time.\nvar defaultHandler *BookHandler\n\n// SetHandler installs the BookHandler that buildRouter wires its routes to.\n// Call this from the application entry point after constructing the DB pool.\nfunc SetHandler(h *BookHandler) {\n\tdefaultHandler = h\n}\n\n// buildRouter constructs the fully-wired chi router for the Book Catalog API.\n// cmd/server/main.go calls this directly.\nfunc buildRouter() http.Handler {\n\tr := chi.NewRouter()\n\tr.Use(middleware.Logger)\n\tr.Use(middleware.Recoverer)\n\n\th := defaultHandler\n\tif h == nil {\n\t\t// Fail loud but safe: unconfigured store yields 500s.\n\t\tlog.Printf(\"WARNING: buildRouter called before SetHandler; handlers will return 500\")\n\t\th = NewBookHandler(unconfiguredStore{})\n\t}\n\n\tr.Get(\"/healthz\", func(w http.ResponseWriter, _ *http.Request) {\n\t\tw.WriteHeader(http.StatusOK)\n\t\tfmt.Fprintln(w, \"ok\")\n\t})\n\n\tr.Get(\"/\", h.Root)\n\tr.Get(\"/health\", h.HealthCheck)\n\n\tr.Route(\"/books\", func(r chi.Router) {\n\t\tr.Get(\"/\", h.ListBooks)\n\t\tr.Post(\"/\", h.CreateBook)\n\t\tr.Get(\"/{book_id}\", h.GetBook)\n\t\tr.Put(\"/{book_id}\", h.UpdateBook)\n\t\tr.Delete(\"/{book_id}\", h.DeleteBook)\n\t})\n\n\treturn r\n}\n\n// unconfiguredStore is the fallback bookStore used when SetHandler was never\n// called. Every method returns an error so requests surface as 500s.\ntype unconfiguredStore struct{}\n\nfunc (unconfiguredStore) List(context.Context, int, int) ([]Book, error) {\n\treturn nil, errors.New(\"book store not configured\")\n}\nfunc (unconfiguredStore) Get(context.Context, int64) (Book, bool, error) {\n\treturn Book{}, false, errors.New(\"book store not configured\")\n}\nfunc (unconfiguredStore) Create(context.Context, *Book) error {\n\treturn errors.New(\"book store not configured\")\n}\nfunc (unconfiguredStore) Update(context.Context, *Book) error {\n\treturn errors.New(\"book store not configured\")\n}\nfunc (unconfiguredStore) Delete(context.Context, int64) (bool, error) {\n\treturn false, errors.New(\"book store not configured\")\n}\n",
-  "target_path": "internal/main.go",
-  "confidence": 0.82,
-  "notes": [
-    "buildRouter() has a fixed no-arg signature dictated by cmd/server/main.go, so dependencies are injected via a package-level SetHandler(NewBookHandler(NewBookRepository(db))) which the entry point must call after opening the DB pool. An unconfiguredStore fallback returns 500s (never panics) if SetHandler was skipped.",
-    "toResponse delegates to the already-migrated NewBookResponse for the explicit whitelist mapping, avoiding a re-Get on update as instructed.",
-    "UpdateBook assumes BookUpdate exposes an ApplyTo(*Book) method that merges only present fields (exclude_unset semantics). If schemas.go names this differently,
+package internal
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+)
+
+// MIGRATION_NOTE: The Python source was a FastAPI app defined in one file that
+// mixed async and sync SQLAlchemy sessions. In Go there is a single *DB
+// connection pool (see internal/database.go); the async/sync distinction is
+// irrelevant because database/sql is concurrency-safe and context-driven.
+//
+// FastAPI's automatic OpenAPI docs (/docs, /redoc) have no standard-library
+// Go equivalent and are intentionally NOT reproduced. If interactive docs are
+// required, generate an OpenAPI spec separately (e.g. with swaggo) — this is a
+// deliberate omission, not an oversight.
+//
+// The custom HTTPException handler is replaced by writeError, which emits the
+// same {"detail": ...} JSON shape the Python handler produced.
+
+// bookStore is the persistence contract the HTTP handlers depend on. Defining
+// it as an interface keeps the handlers testable and decoupled from the
+// concrete *DB implementation.
+type bookStore interface {
+	List(ctx context.Context, skip, limit int) ([]Book, error)
+	Get(ctx context.Context, id int64) (Book, bool, error)
+	Create(ctx context.Context, b *Book) error
+	Update(ctx context.Context, b *Book) error
+	Delete(ctx context.Context, id int64) (bool, error)
+}
+
+// errDuplicate signals a unique-constraint violation (title+author already
+// exists). Repository implementations return this so handlers can map it to a
+// 400 response without inspecting driver-specific error strings.
+var errDuplicate = errors.New("book with this title and author already exists")
+
+// BookRepository is the default bookStore backed by a *DB connection pool.
+type BookRepository struct {
+	db *DB
+}
+
+// NewBookRepository constructs a BookRepository over the given database pool.
+func NewBookRepository(db *DB) *BookRepository {
+	return &BookRepository{db: db}
+}
+
+// List returns up to limit books, skipping the first skip rows, ordered by id.
+func (r *BookRepository) List(ctx context.Context, skip, limit int) ([]Book, error) {
+	const q = `SELECT id, title, author, published_year, summary
+	           FROM books ORDER BY id OFFSET $1 LIMIT $2`
+	books := []Book{}
+	if err := r.db.SelectContext(ctx, &books, q, skip, limit); err != nil {
+		return nil, fmt.Errorf("list books: %w", err)
+	}
+	return books, nil
+}
+
+// Get returns the book with the given id. The bool is false when no such book
+// exists (mirroring SQLAlchemy's scalar_one_or_none -> None).
+func (r *BookRepository) Get(ctx context.Context, id int64) (Book, bool, error) {
+	const q = `SELECT id, title, author, published_year, summary
+	           FROM books WHERE id = $1`
+	var b Book
+	if err := r.db.GetContext(ctx, &b, q, id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Book{}, false, nil
+		}
+		return Book{}, false, fmt.Errorf("get book %d: %w", id, err)
+	}
+	return b, true, nil
+}
+
+// Create inserts a new book and populates its ID via RETURNING. A unique
+// constraint violation is surfaced as errDuplicate.
+func (r *BookRepository) Create(ctx context.Context, b *Book) error {
+	const q = `INSERT INTO books (title, author, published_year, summary)
+	           VALUES ($1, $2, $3, $4) RETURNING id`
+	err := r.db.QueryRowContext(ctx, q, b.Title, b.Author, b.PublishedYear, b.Summary).Scan(&b.ID)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return errDuplicate
+		}
+		return fmt.Errorf("create book: %w", err)
+	}
+	return nil
+}
+
+// Update persists all mutable fields of an existing book. A unique constraint
+// violation is surfaced as errDuplicate.
+func (r *BookRepository) Update(ctx context.Context, b *Book) error {
+	const q = `UPDATE books
+	           SET title = $1, author = $2, published_year = $3, summary = $4
+	           WHERE id = $5`
+	_, err := r.db.ExecContext(ctx, q, b.Title, b.Author, b.PublishedYear, b.Summary, b.ID)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return errDuplicate
+		}
+		return fmt.Errorf("update book %d: %w", b.ID, err)
+	}
+	return nil
+}
+
+// Delete removes a book by id, returning whether a row was actually deleted.
+func (r *BookRepository) Delete(ctx context.Context, id int64) (bool, error) {
+	const q = `DELETE FROM books WHERE id = $1`
+	res, err := r.db.ExecContext(ctx, q, id)
+	if err != nil {
+		return false, fmt.Errorf("delete book %d: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("delete book %d rows affected: %w", id, err)
+	}
+	return n > 0, nil
+}
+
+// isUniqueViolation reports whether err represents a PostgreSQL unique_violation
+// (SQLSTATE 23505).
+func isUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	type sqlStater interface{ SQLState() string }
+	var ss sqlStater
+	if errors.As(err, &ss) {
+		return ss.SQLState() == "23505"
+	}
+	return strings.Contains(err.Error(), "23505") ||
+		strings.Contains(strings.ToLower(err.Error()), "unique constraint")
+}
+
+// BookHandler holds the dependencies required to serve the book catalog HTTP
+// API. Construct it via NewBookHandler.
+type BookHandler struct {
+	store bookStore
+}
+
+// NewBookHandler constructs a BookHandler backed by the given store.
+func NewBookHandler(store bookStore) *BookHandler {
+	return &BookHandler{store: store}
+}
+
+// toResponse maps a Book domain struct onto the public BookResponse DTO.
+func toResponse(b Book) BookResponse {
+	resp, _ := NewBookResponse(&b)
+	return resp
+}
+
+// writeJSON serializes v as JSON with the given status code.
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if v == nil {
+		return
+	}
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("error encoding response: %v", err)
+	}
+}
+
+// writeError emits the {"detail": ...} error envelope the Python custom
+// exception handler produced, preserving wire compatibility for clients.
+func writeError(w http.ResponseWriter, status int, detail string) {
+	writeJSON(w, status, map[string]string{"detail": detail})
+}
+
+// Root serves GET / — API welcome message, version and docs URL.
+func (h *BookHandler) Root(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message":  "Welcome to Book Catalog API",
+		"version":  "1.0.0",
+		"docs_url": "/docs",
+	})
+}
+
+// HealthCheck serves GET /health.
+func (h *BookHandler) HealthCheck(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":  "healthy",
+		"service": "book-catalog-api",
+	})
+}
+
+// ListBooks serves GET /books/ with skip/limit pagination (limit capped 1000).
+func (h *BookHandler) ListBooks(w http.ResponseWriter, r *http.Request) {
+	skip := parseIntQuery(r, "skip", 0)
+	if skip < 0 {
+		skip = 0
+	}
+	limit := parseIntQuery(r, "limit", 100)
+	if limit > 1000 {
+		limit = 1000
+	}
+	if limit < 0 {
+		limit = 0
+	}
+
+	books, err := h.store.List(r.Context(), skip, limit)
+	if err != nil {
+		log.Printf("error retrieving books: %v", err)
+		writeError(w, http.StatusInternalServerError, "Internal server error while retrieving books")
+		return
+	}
+
+	resp := make([]BookResponse, 0, len(books))
+	for _, b := range books {
+		resp = append(resp, toResponse(b))
+	}
+	log.Printf("Retrieved %d books (skip=%d, limit=%d)", len(books), skip, limit)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// GetBook serves GET /books/{book_id}.
+func (h *BookHandler) GetBook(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseIDParam(w, r)
+	if !ok {
+		return
+	}
+
+	book, found, err := h.store.Get(r.Context(), id)
+	if err != nil {
+		log.Printf("error retrieving book %d: %v", id, err)
+		writeError(w, http.StatusInternalServerError, "Internal server error while retrieving book")
+		return
+	}
+	if !found {
+		log.Printf("Book with ID %d not found", id)
+		writeError(w, http.StatusNotFound, fmt.Sprintf("Book with ID %d not found", id))
+		return
+	}
+	log.Printf("Retrieved book: %s", book.Title)
+	writeJSON(w, http.StatusOK, toResponse(book))
+}
+
+// CreateBook serves POST /books/ — returns 201, or 400 on duplicate.
+func (h *BookHandler) CreateBook(w http.ResponseWriter, r *http.Request) {
+	var in BookCreate
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "invalid request body")
+		return
+	}
+	if err := in.Validate(); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+
+	book := Book{
+		Title:         in.Title,
+		Author:        in.Author,
+		PublishedYear: in.PublishedYear,
+		Summary:       in.Summary,
+	}
+
+	if err := h.store.Create(r.Context(), &book); err != nil {
+		if errors.Is(err, errDuplicate) {
+			log.Printf("integrity error creating book: %v", err)
+			writeError(w, http.StatusBadRequest, "Book with this title and author already exists")
+			return
+		}
+		log.Printf("error creating book: %v", err)
+		writeError(w, http.StatusInternalServerError, "Internal server error while creating book")
+		return
+	}
+	log.Printf("Created new book: %s by %s", book.Title, book.Author)
+	writeJSON(w, http.StatusCreated, toResponse(book))
+}
+
+// UpdateBook serves PUT /books/{book_id} — partial update; 404 if not found,
+// 400 on integrity conflict.
+func (h *BookHandler) UpdateBook(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseIDParam(w, r)
+	if !ok {
+		return
+	}
+
+	var upd BookUpdate
+	if err := json.NewDecoder(r.Body).Decode(&upd); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "invalid request body")
+		return
+	}
+	if err := upd.Validate(); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+
+	book, found, err := h.store.Get(r.Context(), id)
+	if err != nil {
+		log.Printf("error updating book %d: %v", id, err)
+		writeError(w, http.StatusInternalServerError, "Internal server error while updating book")
+		return
+	}
+	if !found {
+		log.Printf("Book with ID %d not found for update", id)
+		writeError(w, http.StatusNotFound, fmt.Sprintf("Book with ID %d not found", id))
+		return
+	}
+
+	// Apply only present fields (exclude_unset semantics).
+	if upd.Present("title") && upd.Title != nil {
+		book.Title = *upd.Title
+	}
+	if upd.Present("author") && upd.Author != nil {
+		book.Author = *upd.Author
+	}
+	if upd.Present("published_year") && upd.PublishedYear != nil {
+		book.PublishedYear = *upd.PublishedYear
+	}
+	if upd.Present("summary") {
+		book.Summary = upd.Summary
+	}
+
+	if err := h.store.Update(r.Context(), &book); err != nil {
+		if errors.Is(err, errDuplicate) {
+			log.Printf("integrity error updating book: %v", err)
+			writeError(w, http.StatusBadRequest, "Book with this title and author already exists")
+			return
+		}
+		log.Printf("error updating book %d: %v", id, err)
+		writeError(w, http.StatusInternalServerError, "Internal server error while updating book")
+		return
+	}
+	log.Printf("Updated book: %s", book.Title)
+	writeJSON(w, http.StatusOK, toResponse(book))
+}
+
+// DeleteBook serves DELETE /books/{book_id} — 204 on success, 404 if missing.
+func (h *BookHandler) DeleteBook(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseIDParam(w, r)
+	if !ok {
+		return
+	}
+
+	deleted, err := h.store.Delete(r.Context(), id)
+	if err != nil {
+		log.Printf("error deleting book %d: %v", id, err)
+		writeError(w, http.StatusInternalServerError, "Internal server error while deleting book")
+		return
+	}
+	if !deleted {
+		log.Printf("Book with ID %d not found for deletion", id)
+		writeError(w, http.StatusNotFound, fmt.Sprintf("Book with ID %d not found", id))
+		return
+	}
+	log.Printf("Deleted book %d", id)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// parseIntQuery parses a query parameter as an int, returning def when absent
+// or unparseable.
+func parseIntQuery(r *http.Request, key string, def int) int {
+	raw := r.URL.Query().Get(key)
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return def
+	}
+	return v
+}
+
+// parseIDParam extracts and validates the {book_id} path parameter, writing a
+// 404 and returning ok=false on failure.
+func parseIDParam(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	raw := chi.URLParam(r, "book_id")
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("Book with ID %s not found", raw))
+		return 0, false
+	}
+	return id, true
+}
+
+// defaultHandler is package-level so buildRouter can wire routes without an
+// injected store.
+var defaultHandler *BookHandler
+
+// SetHandler installs the BookHandler that buildRouter wires its routes to.
+// Call this from the application entry point after constructing the DB pool.
+func SetHandler(h *BookHandler) {
+	defaultHandler = h
+}
+
+// BuildRouter constructs the fully-wired chi router for the Book Catalog API.
+// This is the exported wrapper called by cmd/server/main.go.
+func BuildRouter() http.Handler {
+	return buildRouter()
+}
+
+// buildRouter constructs the fully-wired chi router for the Book Catalog API.
+func buildRouter() http.Handler {
+	r := chi.NewRouter()
+	r.Use(middleware.Logger)
+	r.Use(middleware.Recoverer)
+
+	h := defaultHandler
+	if h == nil {
+		log.Printf("WARNING: buildRouter called before SetHandler; handlers will return 500")
+		h = NewBookHandler(unconfiguredStore{})
+	}
+
+	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "ok")
+	})
+
+	r.Get("/", h.Root)
+	r.Get("/health", h.HealthCheck)
+
+	r.Route("/books", func(r chi.Router) {
+		r.Get("/", h.ListBooks)
+		r.Post("/", h.CreateBook)
+		r.Get("/{book_id}", h.GetBook)
+		r.Put("/{book_id}", h.UpdateBook)
+		r.Delete("/{book_id}", h.DeleteBook)
+	})
+
+	return r
+}
+
+// unconfiguredStore is the fallback bookStore used when SetHandler was never
+// called. Every method returns an error so requests surface as 500s.
+type unconfiguredStore struct{}
+
+func (unconfiguredStore) List(context.Context, int, int) ([]Book, error) {
+	return nil, errors.New("book store not configured")
+}
+func (unconfiguredStore) Get(context.Context, int64) (Book, bool, error) {
+	return Book{}, false, errors.New("book store not configured")
+}
+func (unconfiguredStore) Create(context.Context, *Book) error {
+	return errors.New("book store not configured")
+}
+func (unconfiguredStore) Update(context.Context, *Book) error {
+	return errors.New("book store not configured")
+}
+func (unconfiguredStore) Delete(context.Context, int64) (bool, error) {
+	return false, errors.New("book store not configured")
+}
