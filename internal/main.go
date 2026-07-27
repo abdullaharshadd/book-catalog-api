@@ -15,22 +15,6 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
-// MIGRATION_NOTE: The Python source was a FastAPI app defined in one file that
-// mixed async and sync SQLAlchemy sessions. In Go there is a single *DB
-// connection pool (see internal/database.go); the async/sync distinction is
-// irrelevant because database/sql is concurrency-safe and context-driven.
-//
-// FastAPI's automatic OpenAPI docs (/docs, /redoc) have no standard-library
-// Go equivalent and are intentionally NOT reproduced. If interactive docs are
-// required, generate an OpenAPI spec separately (e.g. with swaggo) — this is a
-// deliberate omission, not an oversight.
-//
-// The custom HTTPException handler is replaced by writeError, which emits the
-// same {"detail": ...} JSON shape the Python handler produced.
-
-// bookStore is the persistence contract the HTTP handlers depend on. Defining
-// it as an interface keeps the handlers testable and decoupled from the
-// concrete *DB implementation.
 type bookStore interface {
 	List(ctx context.Context, skip, limit int) ([]Book, error)
 	Get(ctx context.Context, id int64) (Book, bool, error)
@@ -39,22 +23,16 @@ type bookStore interface {
 	Delete(ctx context.Context, id int64) (bool, error)
 }
 
-// errDuplicate signals a unique-constraint violation (title+author already
-// exists). Repository implementations return this so handlers can map it to a
-// 400 response without inspecting driver-specific error strings.
 var errDuplicate = errors.New("book with this title and author already exists")
 
-// BookRepository is the default bookStore backed by a *DB connection pool.
 type BookRepository struct {
 	db *DB
 }
 
-// NewBookRepository constructs a BookRepository over the given database pool.
 func NewBookRepository(db *DB) *BookRepository {
 	return &BookRepository{db: db}
 }
 
-// List returns up to limit books, skipping the first skip rows, ordered by id.
 func (r *BookRepository) List(ctx context.Context, skip, limit int) ([]Book, error) {
 	const q = `SELECT id, title, author, published_year, summary
 	           FROM books ORDER BY id OFFSET $1 LIMIT $2`
@@ -65,8 +43,6 @@ func (r *BookRepository) List(ctx context.Context, skip, limit int) ([]Book, err
 	return books, nil
 }
 
-// Get returns the book with the given id. The bool is false when no such book
-// exists (mirroring SQLAlchemy's scalar_one_or_none -> None).
 func (r *BookRepository) Get(ctx context.Context, id int64) (Book, bool, error) {
 	const q = `SELECT id, title, author, published_year, summary
 	           FROM books WHERE id = $1`
@@ -80,8 +56,6 @@ func (r *BookRepository) Get(ctx context.Context, id int64) (Book, bool, error) 
 	return b, true, nil
 }
 
-// Create inserts a new book and populates its ID via RETURNING. A unique
-// constraint violation is surfaced as errDuplicate.
 func (r *BookRepository) Create(ctx context.Context, b *Book) error {
 	const q = `INSERT INTO books (title, author, published_year, summary)
 	           VALUES ($1, $2, $3, $4) RETURNING id`
@@ -95,8 +69,6 @@ func (r *BookRepository) Create(ctx context.Context, b *Book) error {
 	return nil
 }
 
-// Update persists all mutable fields of an existing book. A unique constraint
-// violation is surfaced as errDuplicate.
 func (r *BookRepository) Update(ctx context.Context, b *Book) error {
 	const q = `UPDATE books
 	           SET title = $1, author = $2, published_year = $3, summary = $4
@@ -111,7 +83,6 @@ func (r *BookRepository) Update(ctx context.Context, b *Book) error {
 	return nil
 }
 
-// Delete removes a book by id, returning whether a row was actually deleted.
 func (r *BookRepository) Delete(ctx context.Context, id int64) (bool, error) {
 	const q = `DELETE FROM books WHERE id = $1`
 	res, err := r.db.ExecContext(ctx, q, id)
@@ -125,8 +96,6 @@ func (r *BookRepository) Delete(ctx context.Context, id int64) (bool, error) {
 	return n > 0, nil
 }
 
-// isUniqueViolation reports whether err represents a PostgreSQL unique_violation
-// (SQLSTATE 23505).
 func isUniqueViolation(err error) bool {
 	if err == nil {
 		return false
@@ -140,24 +109,19 @@ func isUniqueViolation(err error) bool {
 		strings.Contains(strings.ToLower(err.Error()), "unique constraint")
 }
 
-// BookHandler holds the dependencies required to serve the book catalog HTTP
-// API. Construct it via NewBookHandler.
 type BookHandler struct {
 	store bookStore
 }
 
-// NewBookHandler constructs a BookHandler backed by the given store.
 func NewBookHandler(store bookStore) *BookHandler {
 	return &BookHandler{store: store}
 }
 
-// toResponse maps a Book domain struct onto the public BookResponse DTO.
 func toResponse(b Book) BookResponse {
 	resp, _ := NewBookResponse(&b)
 	return resp
 }
 
-// writeJSON serializes v as JSON with the given status code.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -169,13 +133,10 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	}
 }
 
-// writeError emits the {"detail": ...} error envelope the Python custom
-// exception handler produced, preserving wire compatibility for clients.
 func writeError(w http.ResponseWriter, status int, detail string) {
 	writeJSON(w, status, map[string]string{"detail": detail})
 }
 
-// Root serves GET / — API welcome message, version and docs URL.
 func (h *BookHandler) Root(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
 		"message":  "Welcome to Book Catalog API",
@@ -184,7 +145,6 @@ func (h *BookHandler) Root(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HealthCheck serves GET /health.
 func (h *BookHandler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status":  "healthy",
@@ -192,7 +152,6 @@ func (h *BookHandler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ListBooks serves GET /books/ with skip/limit pagination (limit capped 1000).
 func (h *BookHandler) ListBooks(w http.ResponseWriter, r *http.Request) {
 	skip := parseIntQuery(r, "skip", 0)
 	if skip < 0 {
@@ -221,7 +180,6 @@ func (h *BookHandler) ListBooks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// GetBook serves GET /books/{book_id}.
 func (h *BookHandler) GetBook(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r)
 	if !ok {
@@ -243,7 +201,6 @@ func (h *BookHandler) GetBook(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toResponse(book))
 }
 
-// CreateBook serves POST /books/ — returns 201, or 400 on duplicate.
 func (h *BookHandler) CreateBook(w http.ResponseWriter, r *http.Request) {
 	var in BookCreate
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -276,8 +233,6 @@ func (h *BookHandler) CreateBook(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, toResponse(book))
 }
 
-// UpdateBook serves PUT /books/{book_id} — partial update; 404 if not found,
-// 400 on integrity conflict.
 func (h *BookHandler) UpdateBook(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r)
 	if !ok {
@@ -306,7 +261,6 @@ func (h *BookHandler) UpdateBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply only present fields (exclude_unset semantics).
 	if upd.Present("title") && upd.Title != nil {
 		book.Title = *upd.Title
 	}
@@ -334,7 +288,6 @@ func (h *BookHandler) UpdateBook(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toResponse(book))
 }
 
-// DeleteBook serves DELETE /books/{book_id} — 204 on success, 404 if missing.
 func (h *BookHandler) DeleteBook(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r)
 	if !ok {
@@ -356,8 +309,6 @@ func (h *BookHandler) DeleteBook(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// parseIntQuery parses a query parameter as an int, returning def when absent
-// or unparseable.
 func parseIntQuery(r *http.Request, key string, def int) int {
 	raw := r.URL.Query().Get(key)
 	if raw == "" {
@@ -370,8 +321,6 @@ func parseIntQuery(r *http.Request, key string, def int) int {
 	return v
 }
 
-// parseIDParam extracts and validates the {book_id} path parameter, writing a
-// 404 and returning ok=false on failure.
 func parseIDParam(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	raw := chi.URLParam(r, "book_id")
 	id, err := strconv.ParseInt(raw, 10, 64)
@@ -382,23 +331,16 @@ func parseIDParam(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	return id, true
 }
 
-// defaultHandler is package-level so buildRouter can wire routes without an
-// injected store.
 var defaultHandler *BookHandler
 
-// SetHandler installs the BookHandler that buildRouter wires its routes to.
-// Call this from the application entry point after constructing the DB pool.
 func SetHandler(h *BookHandler) {
 	defaultHandler = h
 }
 
-// BuildRouter constructs the fully-wired chi router for the Book Catalog API.
-// This is the exported wrapper called by cmd/server/main.go.
 func BuildRouter() http.Handler {
 	return buildRouter()
 }
 
-// buildRouter constructs the fully-wired chi router for the Book Catalog API.
 func buildRouter() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
@@ -429,8 +371,6 @@ func buildRouter() http.Handler {
 	return r
 }
 
-// unconfiguredStore is the fallback bookStore used when SetHandler was never
-// called. Every method returns an error so requests surface as 500s.
 type unconfiguredStore struct{}
 
 func (unconfiguredStore) List(context.Context, int, int) ([]Book, error) {
