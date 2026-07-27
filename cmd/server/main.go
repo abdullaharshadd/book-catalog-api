@@ -21,8 +21,8 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to load config")
 	}
 
-	// Always build a PostgreSQL DSN from individual env vars if available,
-	// overriding whatever DatabaseURL was loaded (which may point to MySQL).
+	// Always build a PostgreSQL DSN from individual env vars, overriding
+	// whatever DatabaseURL was loaded (which may point to MySQL).
 	host := os.Getenv("DB_HOST")
 	if host == "" {
 		host = os.Getenv("POSTGRES_HOST")
@@ -56,12 +56,8 @@ func main() {
 		dbname = "postgres"
 	}
 
-	// Only use individual env vars to build DSN if we have a host configured,
-	// or if the current DatabaseURL looks like it points to MySQL (port 3306).
-	builtDSN := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", user, password, host, port, dbname)
-	if cfg.DatabaseURL == "" || port == "5432" {
-		cfg.DatabaseURL = builtDSN
-	}
+	// Always override with PostgreSQL DSN unconditionally.
+	cfg.DatabaseURL = fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", user, password, host, port, dbname)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
