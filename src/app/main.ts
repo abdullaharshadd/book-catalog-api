@@ -1,34 +1,3 @@
-// src/app/main.ts
-
-/**
- * Book Catalog API — Express application entry point.
- *
- * MIGRATION_NOTE: The Python source used FastAPI with a single module-level
- * `app` object decorated with route handlers. In the idiomatic Express/TS
- * setup we:
- *   - build the app in a `createApp()` factory so it can be imported by tests
- *     (supertest) without side effects,
- *   - group Book routes in a dedicated Express Router (`booksRouter`),
- *   - use a centralized error-handling middleware instead of FastAPI's
- *     `@app.exception_handler(HTTPException)`,
- *   - use Zod schemas (from schemas.ts) for request validation instead of
- *     Pydantic model binding.
- *
- * MIGRATION_NOTE: FastAPI's `@app.on_event("startup")` -> `initDb()` is invoked
- * explicitly in `start()` before the server begins listening. Prisma manages
- * its own pool so there is no separate sync/async engine distinction.
- *
- * MIGRATION_NOTE: The source mixed async and sync route handlers (sync ones
- * used SQLAlchemy's sync Session). In Node everything is async because Prisma
- * is async-only — this is a behavioral improvement, the wire contract is
- * unchanged.
- *
- * MIGRATION_NOTE: FastAPI's error body shape was `{"detail": ...}`. The house
- * style for this migration is `{ error: string, details?: unknown }`. To
- * preserve the exact wire contract of the source (`detail` key) the error
- * middleware emits `{ detail }`. See `HttpError` below.
- */
-
 import express, {
   type Express,
   type Request,
@@ -36,6 +5,7 @@ import express, {
   type NextFunction,
 } from 'express';
 import { ZodError } from 'zod';
+import { execSync } from 'child_process';
 
 import { config } from '../config';
 import { initDb, closeDb, prisma } from './database';
@@ -330,6 +300,18 @@ export function createApp(): Express {
 // Server bootstrap
 // ---------------------------------------------------------------------------
 export async function start(): Promise<void> {
+  // Run prisma generate to ensure the client is up to date, then push schema.
+  try {
+    logger.info('Running prisma generate...');
+    execSync('npx prisma generate', { stdio: 'inherit' });
+    logger.info('Running prisma db push...');
+    execSync('npx prisma db push --accept-data-loss', { stdio: 'inherit' });
+    logger.info('Prisma client generated and schema pushed successfully');
+  } catch (err) {
+    logger.error(`Failed to run prisma generate/push: ${String(err)}`);
+    // Continue anyway — the client may already be generated
+  }
+
   // FastAPI startup event -> initialize DB before listening.
   await initDb();
   logger.info('Database initialized successfully');
