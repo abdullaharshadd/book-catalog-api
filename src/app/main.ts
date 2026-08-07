@@ -5,7 +5,7 @@ import express, {
   type NextFunction,
 } from 'express';
 import { ZodError } from 'zod';
-import { execSync } from 'child_process';
+import { execSync, spawnSync } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -45,101 +45,135 @@ function isUniqueViolation(err: unknown): boolean {
   );
 }
 
-function tryRunCommand(cmd: string, cwd: string): boolean {
+function findPrismaSchemaViaFind(): string | null {
   try {
-    execSync(cmd, { stdio: 'inherit', cwd });
-    return true;
+    const result = spawnSync('find', ['/', '-name', 'schema.prisma', '-not', '-path', '*/node_modules/.cache/*'], {
+      encoding: 'utf8',
+      timeout: 10000,
+    });
+    if (result.stdout) {
+      const lines = result.stdout.trim().split('\n').filter(Boolean);
+      // Prefer paths that look like app paths
+      const appPath = lines.find(l => l.includes('/app/') && !l.includes('node_modules'));
+      if (appPath) return appPath;
+      const anyPath = lines.find(l => !l.includes('node_modules'));
+      if (anyPath) return anyPath;
+    }
   } catch {
-    return false;
+    // ignore
   }
+  return null;
 }
 
-function runPrismaGenerate(): void {
-  const cwdCandidates = [
-    '/app',
+function findPrismaSchema(): string | null {
+  const candidates = [
+    path.join(process.cwd(), 'prisma', 'schema.prisma'),
+    path.join(process.cwd(), 'schema.prisma'),
+    path.join(__dirname, '..', '..', 'prisma', 'schema.prisma'),
+    path.join(__dirname, '..', 'prisma', 'schema.prisma'),
+    path.join(__dirname, 'prisma', 'schema.prisma'),
+    '/app/prisma/schema.prisma',
+    '/app/schema.prisma',
+    path.join(__dirname, '..', '..', '..', 'prisma', 'schema.prisma'),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) {
+        logger.info(`Found schema at: ${candidate}`);
+        return candidate;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  // Try using find as a fallback
+  logger.info('Schema not found in standard locations, trying find...');
+  return findPrismaSchemaViaFind();
+}
+
+function findPrismaBinary(): string | null {
+  const candidates = [
+    path.join(process.cwd(), 'node_modules', '.bin', 'prisma'),
+    path.join(process.cwd(), 'node_modules', 'prisma', 'build', 'index.js'),
+    '/app/node_modules/.bin/prisma',
+    '/app/node_modules/prisma/build/index.js',
+    path.join(__dirname, '..', '..', 'node_modules', '.bin', 'prisma'),
+    path.join(__dirname, '..', '..', 'node_modules', 'prisma', 'build', 'index.js'),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return null;
+}
+
+function tryRunPrismaGenerate(schemaPath: string): boolean {
+  const cwds = [
+    path.dirname(schemaPath),
+    path.dirname(path.dirname(schemaPath)),
     process.cwd(),
-    path.join(__dirname, '..', '..'),
-    path.join(__dirname, '..'),
-    __dirname,
+    '/app',
   ];
 
-  const schemaCandidates = [
-    'prisma/schema.prisma',
-    'schema.prisma',
-    '../prisma/schema.prisma',
-  ];
+  const prismaBin = findPrismaBinary();
+  const cmds: string[] = [];
 
-  // First try: find schema file and use --schema flag
-  for (const cwd of cwdCandidates) {
-    for (const rel of schemaCandidates) {
-      const abs = path.resolve(cwd, rel);
+  if (prismaBin) {
+    cmds.push(`node "${prismaBin}" generate --schema="${schemaPath}"`);
+  }
+  cmds.push(`npx --no-install prisma generate --schema="${schemaPath}"`);
+  cmds.push(`npx prisma generate --schema="${schemaPath}"`);
+
+  for (const cwd of cwds) {
+    for (const cmd of cmds) {
       try {
-        if (fs.existsSync(abs)) {
-          logger.info(`Found schema at ${abs}, running prisma generate...`);
-          if (tryRunCommand(`npx prisma generate --schema="${abs}"`, cwd)) {
-            logger.info('prisma generate succeeded');
-            return;
-          }
-        }
+        logger.info(`Trying: ${cmd} (cwd=${cwd})`);
+        execSync(cmd, { stdio: 'inherit', cwd, timeout: 60000 });
+        logger.info('prisma generate succeeded');
+        return true;
       } catch {
-        // continue
+        // try next
       }
     }
   }
-
-  // Second try: run from each candidate cwd without explicit schema
-  for (const cwd of cwdCandidates) {
-    logger.info(`Trying prisma generate from cwd=${cwd}...`);
-    if (tryRunCommand('npx prisma generate', cwd)) {
-      logger.info('prisma generate succeeded');
-      return;
-    }
-  }
-
-  logger.warn('All prisma generate attempts failed; will try to use existing client');
+  return false;
 }
 
-function runPrismaDbPush(): void {
-  const cwdCandidates = [
-    '/app',
+function tryRunPrismaDbPush(schemaPath: string): boolean {
+  const cwds = [
+    path.dirname(schemaPath),
+    path.dirname(path.dirname(schemaPath)),
     process.cwd(),
-    path.join(__dirname, '..', '..'),
-    path.join(__dirname, '..'),
-    __dirname,
+    '/app',
   ];
 
-  const schemaCandidates = [
-    'prisma/schema.prisma',
-    'schema.prisma',
-    '../prisma/schema.prisma',
-  ];
+  const prismaBin = findPrismaBinary();
+  const cmds: string[] = [];
 
-  for (const cwd of cwdCandidates) {
-    for (const rel of schemaCandidates) {
-      const abs = path.resolve(cwd, rel);
+  if (prismaBin) {
+    cmds.push(`node "${prismaBin}" db push --accept-data-loss --schema="${schemaPath}"`);
+  }
+  cmds.push(`npx --no-install prisma db push --accept-data-loss --schema="${schemaPath}"`);
+  cmds.push(`npx prisma db push --accept-data-loss --schema="${schemaPath}"`);
+
+  for (const cwd of cwds) {
+    for (const cmd of cmds) {
       try {
-        if (fs.existsSync(abs)) {
-          logger.info(`Found schema at ${abs}, running prisma db push...`);
-          if (tryRunCommand(`npx prisma db push --accept-data-loss --schema="${abs}"`, cwd)) {
-            logger.info('prisma db push succeeded');
-            return;
-          }
-        }
+        logger.info(`Trying: ${cmd} (cwd=${cwd})`);
+        execSync(cmd, { stdio: 'inherit', cwd, timeout: 60000 });
+        logger.info('prisma db push succeeded');
+        return true;
       } catch {
-        // continue
+        // try next
       }
     }
   }
-
-  for (const cwd of cwdCandidates) {
-    logger.info(`Trying prisma db push from cwd=${cwd}...`);
-    if (tryRunCommand('npx prisma db push --accept-data-loss', cwd)) {
-      logger.info('prisma db push succeeded');
-      return;
-    }
-  }
-
-  logger.warn('All prisma db push attempts failed');
+  return false;
 }
 
 function clearPrismaRequireCache(): void {
@@ -152,6 +186,29 @@ function clearPrismaRequireCache(): void {
   );
   for (const key of keysToDelete) {
     delete require.cache[key];
+  }
+}
+
+function isPrismaClientInitialized(): boolean {
+  try {
+    // Try to find the generated client index
+    const candidates = [
+      '/app/node_modules/.prisma/client/index.js',
+      path.join(process.cwd(), 'node_modules', '.prisma', 'client', 'index.js'),
+      path.join(__dirname, '..', '..', 'node_modules', '.prisma', 'client', 'index.js'),
+    ];
+    for (const c of candidates) {
+      if (fs.existsSync(c)) {
+        const content = fs.readFileSync(c, 'utf8');
+        // If it contains "did not initialize yet" it's a stub
+        if (!content.includes('did not initialize yet')) {
+          return true;
+        }
+      }
+    }
+    return false;
+  } catch {
+    return false;
   }
 }
 
@@ -340,20 +397,65 @@ export function createApp(prisma: import('@prisma/client').PrismaClient): Expres
 }
 
 export async function start(): Promise<void> {
-  // Step 1: run prisma generate before loading any prisma-dependent modules
-  runPrismaGenerate();
+  // Log current working directory and __dirname for debugging
+  logger.info(`process.cwd()=${process.cwd()}, __dirname=${__dirname}`);
 
-  // Step 2: clear require cache so fresh client is picked up
-  clearPrismaRequireCache();
+  // List filesystem roots for debugging
+  try {
+    const appContents = fs.readdirSync('/app').join(', ');
+    logger.info(`/app contents: ${appContents}`);
+  } catch {
+    logger.warn('Could not list /app');
+  }
 
-  // Step 3: load database module (lazy, after generate)
+  // Check if already initialized
+  const alreadyInit = isPrismaClientInitialized();
+  logger.info(`Prisma client already initialized: ${alreadyInit}`);
+
+  let schemaPath: string | null = null;
+
+  if (!alreadyInit) {
+    schemaPath = findPrismaSchema();
+    logger.info(`Prisma schema: ${schemaPath ?? 'not found'}`);
+
+    if (schemaPath !== null) {
+      const generated = tryRunPrismaGenerate(schemaPath);
+      if (!generated) {
+        logger.warn('All prisma generate attempts failed; will try to proceed anyway');
+      }
+      clearPrismaRequireCache();
+    } else {
+      logger.warn('Cannot find prisma schema; skipping generate');
+    }
+  }
+
+  // Load database module after generate attempt
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const db = require('./database') as typeof import('./database');
 
-  // Step 4: push schema to DB
-  runPrismaDbPush();
+  // Run db push after loading db module
+  if (schemaPath !== null) {
+    tryRunPrismaDbPush(schemaPath);
+  } else if (!alreadyInit) {
+    // Try db push with find fallback
+    schemaPath = findPrismaSchema();
+    if (schemaPath !== null) {
+      tryRunPrismaDbPush(schemaPath);
+    }
+  } else {
+    // Already initialized, still try db push to ensure schema is in sync
+    schemaPath = findPrismaSchema();
+    if (schemaPath !== null) {
+      tryRunPrismaDbPush(schemaPath);
+    } else {
+      try {
+        execSync('npx prisma db push --accept-data-loss', { stdio: 'inherit', cwd: process.cwd(), timeout: 60000 });
+      } catch {
+        logger.warn('db push fallback also failed');
+      }
+    }
+  }
 
-  // Step 5: initialize DB (connect, run any seed logic)
   await db.initDb();
   logger.info('Database initialized successfully');
 
