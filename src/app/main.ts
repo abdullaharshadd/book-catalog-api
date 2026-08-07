@@ -8,15 +8,11 @@ import { ZodError } from 'zod';
 import { execSync } from 'child_process';
 
 import { config } from '../config';
-import { initDb, closeDb, prisma } from './database';
 import { toBookResponse, bookCreateSchema, bookUpdateSchema } from './schemas';
 
 // ---------------------------------------------------------------------------
 // Logger
 // ---------------------------------------------------------------------------
-// MIGRATION_NOTE: Python used the stdlib `logging` module. A minimal typed
-// wrapper around console keeps this file dependency-light; swap for pino/winston
-// at the app level if structured logging is required.
 const logger = {
   info: (msg: string): void => console.log(`[INFO] ${msg}`),
   warn: (msg: string): void => console.warn(`[WARN] ${msg}`),
@@ -56,9 +52,9 @@ function isUniqueViolation(err: unknown): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Books router
+// Books router — accepts prisma as a parameter to allow lazy loading
 // ---------------------------------------------------------------------------
-export function createBooksRouter(): express.Router {
+export function createBooksRouter(prisma: import('@prisma/client').PrismaClient): express.Router {
   const router = express.Router();
 
   // GET /books/ -> list_books (pagination via skip/limit)
@@ -69,7 +65,6 @@ export function createBooksRouter(): express.Router {
         const skip = Number.parseInt(String(req.query.skip ?? '0'), 10) || 0;
         let limit = Number.parseInt(String(req.query.limit ?? '100'), 10);
         if (Number.isNaN(limit)) limit = 100;
-        // Enforce reasonable limits (source: limit = min(limit, 1000))
         limit = Math.min(limit, 1000);
 
         const books = await prisma.book.findMany({
@@ -118,16 +113,12 @@ export function createBooksRouter(): express.Router {
   router.post(
     '/',
     asyncHandler(async (req: Request, res: Response) => {
-      // MIGRATION_NOTE: Zod validation replaces Pydantic body binding. A
-      // ZodError bubbles to the error middleware and becomes HTTP 422 to match
-      // FastAPI's request-validation status code.
       const parsed = bookCreateSchema.parse(req.body);
       try {
         const dbBook = await prisma.book.create({ data: parsed });
         logger.info(
           `Created new book: ${dbBook.title} by ${dbBook.author}`,
         );
-        // Source: status_code=status.HTTP_201_CREATED
         res.status(201).json(toBookResponse(dbBook));
       } catch (err) {
         if (isUniqueViolation(err)) {
@@ -148,8 +139,6 @@ export function createBooksRouter(): express.Router {
     '/:book_id',
     asyncHandler(async (req: Request, res: Response) => {
       const bookId = Number.parseInt(req.params.book_id, 10);
-      // MIGRATION_NOTE: Pydantic's exclude_unset=True -> Zod's optional fields.
-      // Only keys present in the request body are applied.
       const updateData = bookUpdateSchema.parse(req.body);
 
       try {
@@ -162,7 +151,6 @@ export function createBooksRouter(): express.Router {
           throw new HttpError(404, `Book with ID ${bookId} not found`);
         }
 
-        // Strip undefined so only provided fields are updated.
         const data: Record<string, unknown> = {};
         for (const [key, value] of Object.entries(updateData)) {
           if (value !== undefined) data[key] = value;
@@ -210,7 +198,6 @@ export function createBooksRouter(): express.Router {
         await prisma.book.delete({ where: { id: bookId } });
 
         logger.info(`Deleted book: ${existing.title}`);
-        // Source: status_code=status.HTTP_204_NO_CONTENT
         res.status(204).send();
       } catch (err) {
         if (err instanceof HttpError) throw err;
@@ -226,7 +213,7 @@ export function createBooksRouter(): express.Router {
 // ---------------------------------------------------------------------------
 // App factory
 // ---------------------------------------------------------------------------
-export function createApp(): Express {
+export function createApp(prisma: import('@prisma/client').PrismaClient): Express {
   const app = express();
   app.use(express.json());
 
@@ -245,15 +232,7 @@ export function createApp(): Express {
   });
 
   // Book resource routes.
-  app.use('/books', createBooksRouter());
-
-  // -------------------------------------------------------------------------
-  // Malformed JSON handler.
-  // MIGRATION_NOTE: express.json() emits a SyntaxError with `type ===
-  // 'entity.parse.failed'` on malformed request bodies. FastAPI returns 422 for
-  // request-body validation failures, so we normalize malformed JSON to 422 to
-  // match the source's request-validation status code.
-  // -------------------------------------------------------------------------
+  app.use('/books', createBooksRouter(prisma));
 
   // Centralized error-handling middleware (replaces FastAPI exception_handler).
   app.use(
@@ -300,23 +279,34 @@ export function createApp(): Express {
 // Server bootstrap
 // ---------------------------------------------------------------------------
 export async function start(): Promise<void> {
-  // Run prisma generate to ensure the client is up to date, then push schema.
+  // Run prisma generate BEFORE importing database module (which instantiates PrismaClient).
   try {
     logger.info('Running prisma generate...');
     execSync('npx prisma generate', { stdio: 'inherit' });
+    logger.info('Prisma client generated successfully');
+  } catch (err) {
+    logger.warn(`prisma generate warning: ${String(err)}`);
+    // Continue — client may already be generated
+  }
+
+  // Now it is safe to require the database module.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const db = require('./database') as typeof import('./database');
+
+  // Run prisma db push to sync schema.
+  try {
     logger.info('Running prisma db push...');
     execSync('npx prisma db push --accept-data-loss', { stdio: 'inherit' });
-    logger.info('Prisma client generated and schema pushed successfully');
+    logger.info('Schema pushed successfully');
   } catch (err) {
-    logger.error(`Failed to run prisma generate/push: ${String(err)}`);
-    // Continue anyway — the client may already be generated
+    logger.warn(`prisma db push warning: ${String(err)}`);
   }
 
   // FastAPI startup event -> initialize DB before listening.
-  await initDb();
+  await db.initDb();
   logger.info('Database initialized successfully');
 
-  const app = createApp();
+  const app = createApp(db.prisma);
   const port = config.port;
 
   const server = app.listen(port, () => {
@@ -325,7 +315,7 @@ export async function start(): Promise<void> {
 
   const shutdown = async (): Promise<void> => {
     server.close();
-    await closeDb();
+    await db.closeDb();
     process.exit(0);
   };
   process.on('SIGINT', () => void shutdown());
