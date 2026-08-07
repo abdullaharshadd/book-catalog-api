@@ -12,18 +12,12 @@ import * as fs from 'fs';
 import { config } from '../config';
 import { toBookResponse, bookCreateSchema, bookUpdateSchema } from './schemas';
 
-// ---------------------------------------------------------------------------
-// Logger
-// ---------------------------------------------------------------------------
 const logger = {
   info: (msg: string): void => console.log(`[INFO] ${msg}`),
   warn: (msg: string): void => console.warn(`[WARN] ${msg}`),
   error: (msg: string): void => console.error(`[ERROR] ${msg}`),
 };
 
-// ---------------------------------------------------------------------------
-// HttpError — mirrors FastAPI's HTTPException(status_code, detail)
-// ---------------------------------------------------------------------------
 export class HttpError extends Error {
   public readonly statusCode: number;
   public readonly detail: string;
@@ -36,14 +30,12 @@ export class HttpError extends Error {
   }
 }
 
-/** Wrap async route handlers so thrown errors propagate to error middleware. */
 const asyncHandler =
   (fn: (req: Request, res: Response, next: NextFunction) => Promise<unknown>) =>
   (req: Request, res: Response, next: NextFunction): void => {
     fn(req, res, next).catch(next);
   };
 
-/** Detect Prisma unique-constraint violations (SQLAlchemy IntegrityError). */
 function isUniqueViolation(err: unknown): boolean {
   return (
     typeof err === 'object' &&
@@ -53,30 +45,103 @@ function isUniqueViolation(err: unknown): boolean {
   );
 }
 
-/** Find prisma schema file, searching common locations. */
-function findPrismaSchema(): string | null {
-  const candidates = [
-    path.join(process.cwd(), 'prisma', 'schema.prisma'),
-    path.join(process.cwd(), 'schema.prisma'),
-    path.join(__dirname, '..', '..', 'prisma', 'schema.prisma'),
-    path.join(__dirname, '..', 'prisma', 'schema.prisma'),
-    path.join(__dirname, 'prisma', 'schema.prisma'),
-    '/app/prisma/schema.prisma',
-    '/app/schema.prisma',
-  ];
-  for (const candidate of candidates) {
-    try {
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    } catch {
-      // ignore
-    }
+function tryRunCommand(cmd: string, cwd: string): boolean {
+  try {
+    execSync(cmd, { stdio: 'inherit', cwd });
+    return true;
+  } catch {
+    return false;
   }
-  return null;
 }
 
-/** Clear require cache entries related to prisma so re-require picks up newly generated client. */
+function runPrismaGenerate(): void {
+  const cwdCandidates = [
+    '/app',
+    process.cwd(),
+    path.join(__dirname, '..', '..'),
+    path.join(__dirname, '..'),
+    __dirname,
+  ];
+
+  const schemaCandidates = [
+    'prisma/schema.prisma',
+    'schema.prisma',
+    '../prisma/schema.prisma',
+  ];
+
+  // First try: find schema file and use --schema flag
+  for (const cwd of cwdCandidates) {
+    for (const rel of schemaCandidates) {
+      const abs = path.resolve(cwd, rel);
+      try {
+        if (fs.existsSync(abs)) {
+          logger.info(`Found schema at ${abs}, running prisma generate...`);
+          if (tryRunCommand(`npx prisma generate --schema="${abs}"`, cwd)) {
+            logger.info('prisma generate succeeded');
+            return;
+          }
+        }
+      } catch {
+        // continue
+      }
+    }
+  }
+
+  // Second try: run from each candidate cwd without explicit schema
+  for (const cwd of cwdCandidates) {
+    logger.info(`Trying prisma generate from cwd=${cwd}...`);
+    if (tryRunCommand('npx prisma generate', cwd)) {
+      logger.info('prisma generate succeeded');
+      return;
+    }
+  }
+
+  logger.warn('All prisma generate attempts failed; will try to use existing client');
+}
+
+function runPrismaDbPush(): void {
+  const cwdCandidates = [
+    '/app',
+    process.cwd(),
+    path.join(__dirname, '..', '..'),
+    path.join(__dirname, '..'),
+    __dirname,
+  ];
+
+  const schemaCandidates = [
+    'prisma/schema.prisma',
+    'schema.prisma',
+    '../prisma/schema.prisma',
+  ];
+
+  for (const cwd of cwdCandidates) {
+    for (const rel of schemaCandidates) {
+      const abs = path.resolve(cwd, rel);
+      try {
+        if (fs.existsSync(abs)) {
+          logger.info(`Found schema at ${abs}, running prisma db push...`);
+          if (tryRunCommand(`npx prisma db push --accept-data-loss --schema="${abs}"`, cwd)) {
+            logger.info('prisma db push succeeded');
+            return;
+          }
+        }
+      } catch {
+        // continue
+      }
+    }
+  }
+
+  for (const cwd of cwdCandidates) {
+    logger.info(`Trying prisma db push from cwd=${cwd}...`);
+    if (tryRunCommand('npx prisma db push --accept-data-loss', cwd)) {
+      logger.info('prisma db push succeeded');
+      return;
+    }
+  }
+
+  logger.warn('All prisma db push attempts failed');
+}
+
 function clearPrismaRequireCache(): void {
   const keysToDelete = Object.keys(require.cache).filter(
     (k) =>
@@ -90,13 +155,9 @@ function clearPrismaRequireCache(): void {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Books router — accepts prisma as a parameter to allow lazy loading
-// ---------------------------------------------------------------------------
 export function createBooksRouter(prisma: import('@prisma/client').PrismaClient): express.Router {
   const router = express.Router();
 
-  // GET /books/ -> list_books (pagination via skip/limit)
   router.get(
     '/',
     asyncHandler(async (req: Request, res: Response) => {
@@ -112,9 +173,7 @@ export function createBooksRouter(prisma: import('@prisma/client').PrismaClient)
           orderBy: { id: 'asc' },
         });
 
-        logger.info(
-          `Retrieved ${books.length} books (skip=${skip}, limit=${limit})`,
-        );
+        logger.info(`Retrieved ${books.length} books (skip=${skip}, limit=${limit})`);
         res.status(200).json(books.map(toBookResponse));
       } catch (err) {
         logger.error(`Error retrieving books: ${String(err)}`);
@@ -123,7 +182,6 @@ export function createBooksRouter(prisma: import('@prisma/client').PrismaClient)
     }),
   );
 
-  // GET /books/:book_id -> get_book
   router.get(
     '/:book_id',
     asyncHandler(async (req: Request, res: Response) => {
@@ -148,24 +206,18 @@ export function createBooksRouter(prisma: import('@prisma/client').PrismaClient)
     }),
   );
 
-  // POST /books/ -> create_book (returns 201)
   router.post(
     '/',
     asyncHandler(async (req: Request, res: Response) => {
       const parsed = bookCreateSchema.parse(req.body);
       try {
         const dbBook = await prisma.book.create({ data: parsed });
-        logger.info(
-          `Created new book: ${dbBook.title} by ${dbBook.author}`,
-        );
+        logger.info(`Created new book: ${dbBook.title} by ${dbBook.author}`);
         res.status(201).json(toBookResponse(dbBook));
       } catch (err) {
         if (isUniqueViolation(err)) {
           logger.error(`Integrity error creating book: ${String(err)}`);
-          throw new HttpError(
-            400,
-            'Book with this title and author already exists',
-          );
+          throw new HttpError(400, 'Book with this title and author already exists');
         }
         logger.error(`Error creating book: ${String(err)}`);
         throw new HttpError(500, 'Internal server error while creating book');
@@ -173,7 +225,6 @@ export function createBooksRouter(prisma: import('@prisma/client').PrismaClient)
     }),
   );
 
-  // PUT /books/:book_id -> update_book (partial update via exclude_unset)
   router.put(
     '/:book_id',
     asyncHandler(async (req: Request, res: Response) => {
@@ -195,10 +246,7 @@ export function createBooksRouter(prisma: import('@prisma/client').PrismaClient)
           if (value !== undefined) data[key] = value;
         }
 
-        const dbBook = await prisma.book.update({
-          where: { id: bookId },
-          data,
-        });
+        const dbBook = await prisma.book.update({ where: { id: bookId }, data });
 
         logger.info(`Updated book: ${dbBook.title}`);
         res.status(200).json(toBookResponse(dbBook));
@@ -206,10 +254,7 @@ export function createBooksRouter(prisma: import('@prisma/client').PrismaClient)
         if (err instanceof HttpError) throw err;
         if (isUniqueViolation(err)) {
           logger.error(`Integrity error updating book: ${String(err)}`);
-          throw new HttpError(
-            400,
-            'Book with this title and author already exists',
-          );
+          throw new HttpError(400, 'Book with this title and author already exists');
         }
         logger.error(`Error updating book ${bookId}: ${String(err)}`);
         throw new HttpError(500, 'Internal server error while updating book');
@@ -217,7 +262,6 @@ export function createBooksRouter(prisma: import('@prisma/client').PrismaClient)
     }),
   );
 
-  // DELETE /books/:book_id -> delete_book (returns 204)
   router.delete(
     '/:book_id',
     asyncHandler(async (req: Request, res: Response) => {
@@ -228,9 +272,7 @@ export function createBooksRouter(prisma: import('@prisma/client').PrismaClient)
           : await prisma.book.findUnique({ where: { id: bookId } });
 
         if (existing === null) {
-          logger.warn(
-            `Book with ID ${req.params.book_id} not found for deletion`,
-          );
+          logger.warn(`Book with ID ${req.params.book_id} not found for deletion`);
           throw new HttpError(404, `Book with ID ${bookId} not found`);
         }
 
@@ -249,14 +291,10 @@ export function createBooksRouter(prisma: import('@prisma/client').PrismaClient)
   return router;
 }
 
-// ---------------------------------------------------------------------------
-// App factory
-// ---------------------------------------------------------------------------
 export function createApp(prisma: import('@prisma/client').PrismaClient): Express {
   const app = express();
   app.use(express.json());
 
-  // GET / -> root
   app.get('/', (_req: Request, res: Response) => {
     res.status(200).json({
       message: 'Welcome to Book Catalog API',
@@ -265,30 +303,19 @@ export function createApp(prisma: import('@prisma/client').PrismaClient): Expres
     });
   });
 
-  // GET /health -> health_check
   app.get('/health', (_req: Request, res: Response) => {
     res.status(200).json({ status: 'healthy', service: 'book-catalog-api' });
   });
 
-  // Book resource routes.
   app.use('/books', createBooksRouter(prisma));
 
-  // Centralized error-handling middleware (replaces FastAPI exception_handler).
   app.use(
-    (
-      err: unknown,
-      _req: Request,
-      res: Response,
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      _next: NextFunction,
-    ): void => {
-      // Zod validation errors -> 422 (FastAPI request-validation status).
+    (err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
       if (err instanceof ZodError) {
         res.status(422).json({ detail: err.issues });
         return;
       }
 
-      // Malformed JSON body -> 422.
       if (
         typeof err === 'object' &&
         err !== null &&
@@ -299,13 +326,11 @@ export function createApp(prisma: import('@prisma/client').PrismaClient): Expres
         return;
       }
 
-      // Explicit HttpError -> preserve status + `detail` wire shape.
       if (err instanceof HttpError) {
         res.status(err.statusCode).json({ detail: err.detail });
         return;
       }
 
-      // Anything else -> 500.
       logger.error(`Unhandled error: ${String(err)}`);
       res.status(500).json({ detail: 'Internal server error' });
     },
@@ -314,66 +339,21 @@ export function createApp(prisma: import('@prisma/client').PrismaClient): Expres
   return app;
 }
 
-// ---------------------------------------------------------------------------
-// Server bootstrap
-// ---------------------------------------------------------------------------
 export async function start(): Promise<void> {
-  // Attempt to find the prisma schema and run generate + db push.
-  const schemaPath = findPrismaSchema();
-  logger.info(`Prisma schema search result: ${schemaPath ?? 'not found'}`);
+  // Step 1: run prisma generate before loading any prisma-dependent modules
+  runPrismaGenerate();
 
-  // Try prisma generate with explicit schema path first, then without.
-  let generateSucceeded = false;
-  if (schemaPath !== null) {
-    try {
-      logger.info(`Running prisma generate --schema="${schemaPath}"...`);
-      execSync(`npx prisma generate --schema="${schemaPath}"`, { stdio: 'inherit' });
-      logger.info('Prisma client generated successfully (with schema path)');
-      generateSucceeded = true;
-    } catch (err) {
-      logger.warn(`prisma generate (with schema) warning: ${String(err)}`);
-    }
-  }
-
-  if (!generateSucceeded) {
-    // Try without explicit schema — maybe cwd is set correctly by the runner.
-    try {
-      logger.info('Running prisma generate (no explicit schema)...');
-      execSync('npx prisma generate', { stdio: 'inherit', cwd: schemaPath ? path.dirname(schemaPath) : process.cwd() });
-      logger.info('Prisma client generated successfully (no schema path)');
-      generateSucceeded = true;
-    } catch (err) {
-      logger.warn(`prisma generate (no schema) warning: ${String(err)}`);
-    }
-  }
-
-  // Clear require cache so the freshly generated client is picked up.
+  // Step 2: clear require cache so fresh client is picked up
   clearPrismaRequireCache();
 
-  // Now it is safe to require the database module.
+  // Step 3: load database module (lazy, after generate)
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const db = require('./database') as typeof import('./database');
 
-  // Run prisma db push to sync schema with the database.
-  if (schemaPath !== null) {
-    try {
-      logger.info(`Running prisma db push --schema="${schemaPath}"...`);
-      execSync(`npx prisma db push --accept-data-loss --schema="${schemaPath}"`, { stdio: 'inherit' });
-      logger.info('Schema pushed successfully');
-    } catch (err) {
-      logger.warn(`prisma db push warning: ${String(err)}`);
-    }
-  } else {
-    try {
-      logger.info('Running prisma db push (no explicit schema)...');
-      execSync('npx prisma db push --accept-data-loss', { stdio: 'inherit' });
-      logger.info('Schema pushed successfully');
-    } catch (err) {
-      logger.warn(`prisma db push (no schema) warning: ${String(err)}`);
-    }
-  }
+  // Step 4: push schema to DB
+  runPrismaDbPush();
 
-  // FastAPI startup event -> initialize DB before listening.
+  // Step 5: initialize DB (connect, run any seed logic)
   await db.initDb();
   logger.info('Database initialized successfully');
 
@@ -393,7 +373,6 @@ export async function start(): Promise<void> {
   process.on('SIGTERM', () => void shutdown());
 }
 
-// Only auto-start when run directly (not when imported by tests).
 if (require.main === module) {
   start().catch((err) => {
     logger.error(`Failed to start server: ${String(err)}`);
