@@ -26,14 +26,27 @@ if (schemaPath) {
     console.warn('[WARN] prisma generate warning:', err);
   }
 } else {
-  console.warn('[WARN] Could not find prisma schema, skipping prisma generate');
+  // Try to find schema by searching recursively from /app
+  try {
+    const found = execSync('find /app -name "schema.prisma" 2>/dev/null | head -5', { encoding: 'utf8' }).trim();
+    console.log('[INFO] Prisma schema search result:', found || 'not found');
+    if (found) {
+      const firstFound = found.split('\n')[0].trim();
+      schemaPath = firstFound;
+      execSync(`npx prisma generate --schema=${firstFound}`, { stdio: 'inherit' });
+    } else {
+      console.warn('[WARN] Could not find prisma schema file; skipping generate/push');
+    }
+  } catch (err) {
+    console.warn('[WARN] prisma generate warning:', err);
+  }
 }
 
 // Import app modules AFTER prisma generate has run
 const { createApp, start } = require('./app/main');
 
 start().catch((err: unknown) => {
-  console.error(`Failed to start server: ${String(err)}`);
+  console.error(`[ERROR] Failed to start server: ${String(err)}`);
   process.exit(1);
 });
 
