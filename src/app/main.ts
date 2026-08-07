@@ -6,6 +6,8 @@ import express, {
 } from 'express';
 import { ZodError } from 'zod';
 import { execSync } from 'child_process';
+import * as path from 'path';
+import * as fs from 'fs';
 
 import { config } from '../config';
 import { toBookResponse, bookCreateSchema, bookUpdateSchema } from './schemas';
@@ -49,6 +51,29 @@ function isUniqueViolation(err: unknown): boolean {
     'code' in err &&
     (err as { code?: unknown }).code === 'P2002'
   );
+}
+
+/** Find prisma schema file, searching common locations. */
+function findPrismaSchema(): string | null {
+  const candidates = [
+    path.join(process.cwd(), 'prisma', 'schema.prisma'),
+    path.join(process.cwd(), 'schema.prisma'),
+    path.join(__dirname, '..', '..', 'prisma', 'schema.prisma'),
+    path.join(__dirname, '..', 'prisma', 'schema.prisma'),
+    path.join(__dirname, 'prisma', 'schema.prisma'),
+    '/app/prisma/schema.prisma',
+    '/app/schema.prisma',
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -279,28 +304,34 @@ export function createApp(prisma: import('@prisma/client').PrismaClient): Expres
 // Server bootstrap
 // ---------------------------------------------------------------------------
 export async function start(): Promise<void> {
-  // Run prisma generate BEFORE importing database module (which instantiates PrismaClient).
-  try {
-    logger.info('Running prisma generate...');
-    execSync('npx prisma generate', { stdio: 'inherit' });
-    logger.info('Prisma client generated successfully');
-  } catch (err) {
-    logger.warn(`prisma generate warning: ${String(err)}`);
-    // Continue — client may already be generated
+  // Run prisma generate BEFORE importing database module.
+  // Find the schema file first so we can pass it explicitly.
+  const schemaPath = findPrismaSchema();
+  logger.info(`Prisma schema search result: ${schemaPath ?? 'not found'}`);
+
+  if (schemaPath !== null) {
+    try {
+      logger.info(`Running prisma generate --schema=${schemaPath}...`);
+      execSync(`npx prisma generate --schema="${schemaPath}"`, { stdio: 'inherit' });
+      logger.info('Prisma client generated successfully');
+    } catch (err) {
+      logger.warn(`prisma generate warning: ${String(err)}`);
+    }
+
+    try {
+      logger.info(`Running prisma db push --schema=${schemaPath}...`);
+      execSync(`npx prisma db push --accept-data-loss --schema="${schemaPath}"`, { stdio: 'inherit' });
+      logger.info('Schema pushed successfully');
+    } catch (err) {
+      logger.warn(`prisma db push warning: ${String(err)}`);
+    }
+  } else {
+    logger.warn('Could not find prisma schema file; skipping generate/push');
   }
 
   // Now it is safe to require the database module.
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const db = require('./database') as typeof import('./database');
-
-  // Run prisma db push to sync schema.
-  try {
-    logger.info('Running prisma db push...');
-    execSync('npx prisma db push --accept-data-loss', { stdio: 'inherit' });
-    logger.info('Schema pushed successfully');
-  } catch (err) {
-    logger.warn(`prisma db push warning: ${String(err)}`);
-  }
 
   // FastAPI startup event -> initialize DB before listening.
   await db.initDb();
