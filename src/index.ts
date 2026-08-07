@@ -1,6 +1,5 @@
 import 'dotenv/config';
 import { execSync } from 'child_process';
-import { createApp, start } from './app/main';
 
 try {
   execSync('npx prisma generate', { stdio: 'inherit' });
@@ -8,7 +7,10 @@ try {
   console.error('Failed to run prisma generate:', err);
 }
 
-start().catch((err) => {
+// Import app modules AFTER prisma generate has run
+const { createApp, start } = require('./app/main');
+
+start().catch((err: unknown) => {
   console.error(`Failed to start server: ${String(err)}`);
   process.exit(1);
 });
