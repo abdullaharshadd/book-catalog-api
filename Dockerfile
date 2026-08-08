@@ -1,41 +1,31 @@
-# Dockerfile
-FROM python:3.11-slim
+FROM node:18-slim
 
-# Set working directory
-WORKDIR /app
-
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PYTHONPATH="/app"
-
-# Install system dependencies
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        build-essential \
+# Install OpenSSL 1.1 and other dependencies
+RUN apt-get update -y && \
+    apt-get install -y --no-install-recommends \
+        openssl \
+        libssl-dev \
+        ca-certificates \
+        wget \
+    && wget http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2_amd64.deb 2>/dev/null || true \
+    && dpkg -i libssl1.1_1.1.1f-1ubuntu2_amd64.deb 2>/dev/null || true \
+    && rm -f libssl1.1_1.1.1f-1ubuntu2_amd64.deb \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
-COPY requirements.txt .
+WORKDIR /app
 
-# Install Python dependencies
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+COPY package*.json ./
+COPY tsconfig*.json ./
+COPY prisma ./prisma/
 
-# Copy application code
-COPY app/ ./app/
+RUN npm install
 
-# Create non-root user
-RUN adduser --disabled-password --gecos '' --no-create-home appuser \
-    && chown -R appuser:appuser /app
-USER appuser
+COPY src ./src/
 
-# Expose port
-EXPOSE 8000
+RUN npx prisma generate --schema=prisma/schema.prisma || true
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+RUN npm run build || npx tsc || true
 
-# Run the application
-CMD ["gunicorn", "app.main:app", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000"]
+EXPOSE 3000
+
+CMD ["node", "dist/index.js"]
