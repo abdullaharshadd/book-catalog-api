@@ -57,7 +57,6 @@ function findSchemaViaFind(): string | null {
       if (appPath) return appPath;
       const anyPath = lines.find(l => !l.includes('node_modules'));
       if (anyPath) return anyPath;
-      // Even in node_modules could be the source schema
       if (lines.length > 0) return lines[0];
     }
   } catch {
@@ -67,7 +66,6 @@ function findSchemaViaFind(): string | null {
 }
 
 function findOrCreatePrismaSchema(): string | null {
-  // Standard candidate locations
   const candidates = [
     path.join(process.cwd(), 'prisma', 'schema.prisma'),
     path.join(process.cwd(), 'schema.prisma'),
@@ -98,7 +96,6 @@ function findOrCreatePrismaSchema(): string | null {
     return found;
   }
 
-  // Last resort: create a minimal schema in a temp directory
   logger.info('Schema not found anywhere, creating a minimal schema...');
   try {
     const tmpDir = '/tmp/prisma-generated';
@@ -252,6 +249,67 @@ function isPrismaClientInitialized(): boolean {
   } catch {
     return false;
   }
+}
+
+function installOpenSSL(): void {
+  try {
+    logger.info('Attempting to install openssl for Prisma compatibility...');
+    execSync('apt-get update -y && apt-get install -y openssl libssl-dev libssl1.1 2>/dev/null || apt-get install -y openssl libssl-dev 2>/dev/null || true', {
+      stdio: 'inherit',
+      timeout: 120000,
+    });
+    logger.info('openssl install attempt complete');
+  } catch {
+    logger.warn('Could not install openssl via apt-get; trying alternative');
+    try {
+      // Try creating symlinks if libssl.so.3 exists but libssl.so.1.1 is missing
+      execSync(
+        'if [ -f /usr/lib/aarch64-linux-gnu/libssl.so.3 ] && [ ! -f /usr/lib/aarch64-linux-gnu/libssl.so.1.1 ]; then ' +
+        'ln -sf /usr/lib/aarch64-linux-gnu/libssl.so.3 /usr/lib/aarch64-linux-gnu/libssl.so.1.1 && ' +
+        'ln -sf /usr/lib/aarch64-linux-gnu/libcrypto.so.3 /usr/lib/aarch64-linux-gnu/libcrypto.so.1.1; ' +
+        'elif [ -f /usr/lib/x86_64-linux-gnu/libssl.so.3 ] && [ ! -f /usr/lib/x86_64-linux-gnu/libssl.so.1.1 ]; then ' +
+        'ln -sf /usr/lib/x86_64-linux-gnu/libssl.so.3 /usr/lib/x86_64-linux-gnu/libssl.so.1.1 && ' +
+        'ln -sf /usr/lib/x86_64-linux-gnu/libcrypto.so.3 /usr/lib/x86_64-linux-gnu/libcrypto.so.1.1; ' +
+        'fi || true',
+        { stdio: 'inherit', timeout: 30000 },
+      );
+    } catch {
+      logger.warn('Symlink attempt also failed; Prisma may not work');
+    }
+  }
+}
+
+function regeneratePrismaForCurrentOpenSSL(schemaPath: string): boolean {
+  // Try to regenerate with the correct openssl version for the current system
+  const opensslVariants = ['openssl-3.x.x', 'openssl-1.1.x'];
+  const cwds = ['/app', process.cwd()];
+  const prismaBin = findPrismaBinary();
+
+  for (const variant of opensslVariants) {
+    for (const cwd of cwds) {
+      const cmds: string[] = [];
+      if (prismaBin) {
+        cmds.push(`"${prismaBin}" generate --schema="${schemaPath}"`);
+      }
+      cmds.push(`npx --no-install prisma generate --schema="${schemaPath}"`);
+      for (const cmd of cmds) {
+        try {
+          logger.info(`Trying regenerate with PRISMA_CLIENT_ENGINE_TYPE for ${variant}: ${cmd}`);
+          execSync(cmd, {
+            stdio: 'inherit',
+            cwd,
+            timeout: 120000,
+            env: { ...process.env, PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING: '1' },
+          });
+          logger.info('Regenerate succeeded');
+          return true;
+        } catch {
+          // try next
+        }
+      }
+    }
+  }
+  return false;
 }
 
 export function createBooksRouter(prisma: import('@prisma/client').PrismaClient): express.Router {
@@ -448,31 +506,27 @@ export async function start(): Promise<void> {
     logger.warn('Could not list /app');
   }
 
+  // Install openssl first to ensure Prisma can load its native bindings
+  installOpenSSL();
+
   const alreadyInit = isPrismaClientInitialized();
   logger.info(`Prisma client already initialized: ${alreadyInit}`);
 
-  if (!alreadyInit) {
-    const schemaPath = findOrCreatePrismaSchema();
-    logger.info(`Using schema: ${schemaPath ?? 'none'}`);
+  const schemaPath = findOrCreatePrismaSchema();
+  logger.info(`Using schema: ${schemaPath ?? 'none'}`);
 
-    if (schemaPath !== null) {
-      const generated = tryRunPrismaGenerate(schemaPath);
-      if (!generated) {
-        logger.warn('All prisma generate attempts failed; proceeding anyway');
-      }
-      clearPrismaRequireCache();
-
-      // Run db push after generate
-      tryRunPrismaDbPush(schemaPath);
-    } else {
-      logger.warn('No schema available; skipping generate and db push');
+  if (schemaPath !== null) {
+    const generated = tryRunPrismaGenerate(schemaPath);
+    if (!generated) {
+      logger.warn('All prisma generate attempts failed; trying regenerate for current openssl');
+      regeneratePrismaForCurrentOpenSSL(schemaPath);
     }
+    clearPrismaRequireCache();
+
+    // Run db push after generate
+    tryRunPrismaDbPush(schemaPath);
   } else {
-    // Already initialized, still sync schema
-    const schemaPath = findOrCreatePrismaSchema();
-    if (schemaPath !== null) {
-      tryRunPrismaDbPush(schemaPath);
-    }
+    logger.warn('No schema available; skipping generate and db push');
   }
 
   // Load database module after generate attempt
