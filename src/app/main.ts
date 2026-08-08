@@ -537,7 +537,7 @@ export async function start(): Promise<void> {
   logger.info('Database initialized successfully');
 
   const app = createApp(db.prisma);
-  const port = config.port;
+  const port = config.PORT;
 
   const server = app.listen(port, () => {
     logger.info(`Book Catalog API listening on port ${port}`);
