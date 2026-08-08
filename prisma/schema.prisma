@@ -1,6 +1,5 @@
 generator client {
   provider = "prisma-client-js"
-  output   = "/app/node_modules/.prisma/client"
 }
 
 datasource db {
@@ -9,11 +8,15 @@ datasource db {
 }
 
 model Book {
-  id        Int      @id @default(autoincrement())
-  title     String
-  author    String
-  genre     String?
-  year      Int?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id              Int      @id @default(autoincrement())
+  title           String
+  author          String
+  genre           String?
+  publication_year Int?
+  description     String?
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  @@unique([title, author])
+  @@map("books")
 }
