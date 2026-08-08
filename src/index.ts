@@ -48,6 +48,68 @@ for (const loc of schemaLocations) {
   }
 }
 
+// Install openssl if missing
+try {
+  execSync('ldconfig -p | grep libssl.so.1.1', { stdio: 'pipe' });
+  console.log('[INFO] libssl.so.1.1 found');
+} catch {
+  console.log('[INFO] libssl.so.1.1 not found, attempting to install openssl...');
+  try {
+    execSync('apt-get update -y && apt-get install -y openssl libssl1.1 2>/dev/null || apt-get install -y openssl libssl-dev 2>/dev/null || true', { stdio: 'inherit' });
+    console.log('[INFO] openssl installation attempted');
+  } catch (err) {
+    console.warn('[WARN] Could not install openssl:', (err as Error).message?.split('\n')[0]);
+  }
+}
+
+// Also try to create a symlink if libssl.so.3 exists but libssl.so.1.1 doesn't
+try {
+  const libssl3Paths = [
+    '/usr/lib/aarch64-linux-gnu/libssl.so.3',
+    '/usr/lib/x86_64-linux-gnu/libssl.so.3',
+    '/usr/lib/libssl.so.3',
+  ];
+  const libcrypto3Paths = [
+    '/usr/lib/aarch64-linux-gnu/libcrypto.so.3',
+    '/usr/lib/x86_64-linux-gnu/libcrypto.so.3',
+    '/usr/lib/libcrypto.so.3',
+  ];
+
+  for (const ssl3 of libssl3Paths) {
+    if (fs.existsSync(ssl3)) {
+      const dir = path.dirname(ssl3);
+      const ssl11 = path.join(dir, 'libssl.so.1.1');
+      if (!fs.existsSync(ssl11)) {
+        try {
+          execSync(`ln -sf ${ssl3} ${ssl11}`, { stdio: 'inherit' });
+          console.log(`[INFO] Created symlink ${ssl11} -> ${ssl3}`);
+        } catch (e) {
+          console.warn('[WARN] Could not create libssl symlink:', (e as Error).message?.split('\n')[0]);
+        }
+      }
+      break;
+    }
+  }
+
+  for (const crypto3 of libcrypto3Paths) {
+    if (fs.existsSync(crypto3)) {
+      const dir = path.dirname(crypto3);
+      const crypto11 = path.join(dir, 'libcrypto.so.1.1');
+      if (!fs.existsSync(crypto11)) {
+        try {
+          execSync(`ln -sf ${crypto3} ${crypto11}`, { stdio: 'inherit' });
+          console.log(`[INFO] Created symlink ${crypto11} -> ${crypto3}`);
+        } catch (e) {
+          console.warn('[WARN] Could not create libcrypto symlink:', (e as Error).message?.split('\n')[0]);
+        }
+      }
+      break;
+    }
+  }
+} catch (err) {
+  console.warn('[WARN] SSL symlink setup failed:', (err as Error).message?.split('\n')[0]);
+}
+
 if (writtenSchema) {
   const env = {
     ...process.env,
