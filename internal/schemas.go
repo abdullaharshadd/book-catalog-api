@@ -163,7 +163,7 @@ func (b *BookUpdate) Validate() error {
 // NewBookResponse, that maps a persisted Book into the response DTO.
 type BookResponse struct {
 	// ID is the book's primary key.
-	ID int `json:"id"`
+	ID int64 `json:"id"`
 
 	// Title is the book title.
 	Title string `json:"title"`
