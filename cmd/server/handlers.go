@@ -13,16 +13,6 @@ type BookHandler struct {
 	db *sqlx.DB
 }
 
-func writeJSON(w http.ResponseWriter, status int, v interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"detail": msg})
-}
-
 func (h *BookHandler) ListBooks(w http.ResponseWriter, r *http.Request) {
 	skip, _ := strconv.Atoi(r.URL.Query().Get("skip"))
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
