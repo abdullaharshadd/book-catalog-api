@@ -229,10 +229,7 @@ func (h *Handlers) UpdateBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build the SET clause dynamically from the present fields. Each of the
-	// BookUpdate pointer fields is nil when the field was omitted from the
-	// request body and non-nil (possibly pointing at a null-equivalent) when
-	// it was supplied.
+	// Build the SET clause dynamically from the present fields.
 	setClauses := make([]string, 0, 4)
 	args := make([]interface{}, 0, 5)
 	argIdx := 1
@@ -254,15 +251,11 @@ func (h *Handlers) UpdateBook(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Summary != nil {
 		setClauses = append(setClauses, fmt.Sprintf("summary = $%d", argIdx))
-		// Summary is nullable: *in.Summary may itself represent an explicit
-		// null depending on the schema's field type; it is passed straight
-		// through so the source's set-to-null semantics are preserved.
 		args = append(args, *in.Summary)
 		argIdx++
 	}
 
-	// If nothing was supplied, re-fetch and return the unchanged book — this
-	// matches the source, where an empty exclude_unset dict is a no-op update.
+	// If nothing was supplied, re-fetch and return the unchanged book.
 	if len(setClauses) == 0 {
 		book, err := h.findBook(ctx, bookID)
 		if err != nil {
@@ -282,8 +275,6 @@ func (h *Handlers) UpdateBook(w http.ResponseWriter, r *http.Request) {
 	var book Book
 	err := h.db.SQL().QueryRowxContext(ctx, query, args...).StructScan(&book)
 	if errors.Is(err, sql.ErrNoRows) {
-		// Lost a race — the book was deleted between the existence check and
-		// the update. Report as not found to stay consistent with the source.
 		log.Printf("Book with ID %d not found for update", bookID)
 		writeError(w, http.StatusNotFound, fmt.Sprintf("Book with ID %d not found", bookID))
 		return
@@ -349,9 +340,7 @@ func (h *Handlers) findBook(ctx context.Context, id int64) (*Book, error) {
 	return &book, nil
 }
 
-// parseBookID extracts and validates the {book_id} path parameter. It writes a
-// 404 response and returns ok=false when the value is not a valid integer,
-// matching the source's routing behaviour for non-numeric IDs.
+// parseBookID extracts and validates the {book_id} path parameter.
 func parseBookID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	raw := chi.URLParam(r, "book_id")
 	id, err := strconv.ParseInt(raw, 10, 64)
@@ -374,8 +363,7 @@ func parseIntDefault(s string, def int) int {
 	return v
 }
 
-// join concatenates parts with sep. (Small local helper to avoid importing
-// strings solely for a single Join call alongside the rest of this file.)
+// join concatenates parts with sep.
 func join(parts []string, sep string) string {
 	switch len(parts) {
 	case 0:
@@ -391,12 +379,7 @@ func join(parts []string, sep string) string {
 }
 
 // buildRouter constructs the fully-wired HTTP handler for the Book Catalog
-// service. cmd/server/main.go calls this directly.
-//
-// MIGRATION_NOTE: The FastAPI startup event that called init_db() is not run
-// here — schema initialization (InitSchema) belongs in the application
-// bootstrap (cmd/server/main.go), which also owns NewDB. buildRouter takes the
-// already-constructed *DB so router construction stays free of side effects.
+// service. Kept unexported; use BuildRouter for external callers.
 func buildRouter(db *DB) http.Handler {
 	h := NewHandlers(db)
 
@@ -419,4 +402,11 @@ func buildRouter(db *DB) http.Handler {
 	r.Delete("/books/{book_id}", h.DeleteBook)
 
 	return r
+}
+
+// BuildRouter is the exported entry point for constructing the application
+// HTTP handler. cmd/server/main.go calls this after opening the database
+// connection and initializing the schema.
+func BuildRouter(db *DB) http.Handler {
+	return buildRouter(db)
 }
