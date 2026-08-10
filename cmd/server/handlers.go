@@ -9,14 +9,6 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-type Book struct {
-	ID            int    `db:"id" json:"id"`
-	Title         string `db:"title" json:"title"`
-	Author        string `db:"author" json:"author"`
-	PublishedYear int    `db:"published_year" json:"published_year"`
-	Summary       string `db:"summary" json:"summary,omitempty"`
-}
-
 type BookHandler struct {
 	db *sqlx.DB
 }
@@ -126,7 +118,7 @@ func (h *BookHandler) UpdateBook(w http.ResponseWriter, r *http.Request) {
 		existing.PublishedYear = *input.PublishedYear
 	}
 	if input.Summary != nil {
-		existing.Summary = *input.Summary
+		existing.Summary = input.Summary
 	}
 	var updated Book
 	err = h.db.QueryRowx(
