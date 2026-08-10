@@ -13,7 +13,7 @@ type BookCreate struct {
 	Summary       *string `json:"summary"`
 }
 
-// Validate checks required fields.
+// Validate checks that required fields are present.
 func (b *BookCreate) Validate() error {
 	if b.Title == "" {
 		return errors.New("title is required")
@@ -24,7 +24,7 @@ func (b *BookCreate) Validate() error {
 	return nil
 }
 
-// BookUpdate holds the optional fields for a partial update.
+// BookUpdate holds the optional fields that may be updated.
 type BookUpdate struct {
 	Title         *string `json:"title"`
 	Author        *string `json:"author"`
@@ -32,7 +32,7 @@ type BookUpdate struct {
 	Summary       *string `json:"summary"`
 }
 
-// Validate checks that any supplied string fields are non-empty.
+// Validate checks that, if supplied, required string fields are non-empty.
 func (b *BookUpdate) Validate() error {
 	if b.Title != nil && *b.Title == "" {
 		return errors.New("title must not be empty")
@@ -43,7 +43,7 @@ func (b *BookUpdate) Validate() error {
 	return nil
 }
 
-// BookResponse is the API response shape for a book.
+// BookResponse is the JSON shape returned to clients.
 type BookResponse struct {
 	ID            int64     `json:"id"`
 	Title         string    `json:"title"`
@@ -53,7 +53,7 @@ type BookResponse struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
-// NewBookResponse converts a Book model to a BookResponse.
+// NewBookResponse converts a Book model into a BookResponse.
 func NewBookResponse(b Book) BookResponse {
 	return BookResponse{
 		ID:            b.ID,
