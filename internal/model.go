@@ -1,0 +1,15 @@
+package internal
+
+import (
+	"time"
+)
+
+// Book is the database model for a book record.
+type Book struct {
+	ID            int64     `db:"id"`
+	Title         string    `db:"title"`
+	Author        string    `db:"author"`
+	PublishedYear *int      `db:"published_year"`
+	Summary       *string   `db:"summary"`
+	CreatedAt     time.Time `db:"created_at"`
+}
