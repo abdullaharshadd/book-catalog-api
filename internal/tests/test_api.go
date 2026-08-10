@@ -36,7 +36,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	app "example.com/bookcatalog/internal"
+	app "migrated-app/internal"
 )
 
 // buildRouter constructs the fully-wired HTTP handler for the Book Catalog API.
