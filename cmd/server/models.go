@@ -1,6 +1,6 @@
 package main
 
-// Book represents a book record in the database.
+// Book is the model for a book record.
 type Book struct {
 	ID            int    `db:"id" json:"id"`
 	Title         string `db:"title" json:"title"`
