@@ -1,4 +1,4 @@
-module github.com/book-catalog-api
+module book-catalog-api
 
 go 1.21
 
