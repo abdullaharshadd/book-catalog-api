@@ -1,21 +1,22 @@
-// Package internal contains the Book Catalog API application code.
+// Package internal contains the core implementation of the Book Catalog API,
+// a simple CRUD service for managing books.
 //
-// A simple CRUD service for managing books, migrated from a Python
-// (FastAPI/SQLAlchemy/Pydantic) codebase to idiomatic Go using chi for
-// routing, sqlx for database access, and PostgreSQL as the backing store.
-//
-// This file corresponds to the original app/__init__.py, which only defined
-// package-level metadata (version, author, email) via Python dunder
-// variables. In Go, these are expressed as exported package constants.
+// MIGRATION_NOTE: The original Python package docstring referenced FastAPI,
+// SQLAlchemy, and Pydantic. In this Go migration the equivalent stack is
+// net/http with go-chi routing, sqlx over lib/pq (PostgreSQL), and plain
+// structs for request/response payloads. The package-level dunder metadata
+// (__version__, __author__, __email__) is expressed here as exported
+// constants so it can be referenced elsewhere (e.g. in a /version endpoint
+// or build info).
 package internal
 
 const (
 	// Version is the semantic version of the Book Catalog API.
 	Version = "1.0.0"
 
-	// Author is the name of the application author.
+	// Author is the primary author of the Book Catalog API.
 	Author = "Abdullah Arshad"
 
-	// Email is the contact email of the application author.
+	// Email is the contact email for the Book Catalog API author.
 	Email = "abdullah.arshad.314@gmail.com"
 )
