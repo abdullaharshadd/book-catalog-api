@@ -8,186 +8,233 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/your/module/internal"
+	"github.com/yourusername/bookcatalog/internal"
 )
 
+// semVerPattern matches a strict major.minor.patch semantic version string.
+var semVerPattern = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+
+// emailPattern is a simple RFC-5322-ish pattern sufficient for the invariant
+// check specified in the behavioral specs.
+var emailPattern = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
+
+// ---------------------------------------------------------------------------
+// Version constant
+// ---------------------------------------------------------------------------
+
 func TestVersion(t *testing.T) {
-	semverRe := regexp.MustCompile(`^\d+\.\d+\.\d+$`)
-
 	tests := []struct {
-		name     string
-		got      string
-		expected string
+		name            string
+		scenario        string
+		wantValue       string
+		wantNonEmpty    bool
+		wantSemVer      bool
+		wantConstantStr bool
 	}{
 		{
-			name:     "accessing the package version attribute returns 1.0.0",
-			got:      internal.Version,
-			expected: "1.0.0",
+			name:            "accessing the package version attribute returns 1.0.0",
+			scenario:        "accessing the package version attribute",
+			wantValue:       "1.0.0",
+			wantNonEmpty:    true,
+			wantSemVer:      true,
+			wantConstantStr: true,
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, tt.got, "Version should equal the expected semantic version string")
-			assert.True(t, semverRe.MatchString(tt.got), "Version must be in semantic-version form MAJOR.MINOR.PATCH, got: %q", tt.got)
-		})
-	}
-}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			// The constant value must equal exactly the expected string.
+			assert.Equal(t, tc.wantValue, internal.Version,
+				"Version should equal %q (scenario: %s)", tc.wantValue, tc.scenario)
 
-func TestAuthor(t *testing.T) {
-	tests := []struct {
-		name     string
-		got      string
-		expected string
-	}{
-		{
-			name:     "accessing the package author attribute returns 'Abdullah Arshad'",
-			got:      internal.Author,
-			expected: "Abdullah Arshad",
-		},
-	}
+			// Invariant: Version is always a non-empty string.
+			if tc.wantNonEmpty {
+				assert.NotEmpty(t, internal.Version, "Version must not be empty")
+			}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, tt.got, "Author should equal the expected author name")
-			assert.NotEmpty(t, tt.got, "Author must be a non-empty string")
-		})
-	}
-}
+			// Invariant: Version follows semantic versioning format (major.minor.patch).
+			if tc.wantSemVer {
+				assert.Regexp(t, semVerPattern, internal.Version,
+					"Version must follow semantic versioning format (major.minor.patch)")
+			}
 
-func TestEmail(t *testing.T) {
-	// Simple email format validator: requires at least one char, @, domain with dot.
-	emailRe := regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
-
-	tests := []struct {
-		name     string
-		got      string
-		expected string
-	}{
-		{
-			name:     "accessing the package email attribute returns 'abdullah.arshad.314@gmail.com'",
-			got:      internal.Email,
-			expected: "abdullah.arshad.314@gmail.com",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, tt.got, "Email should equal the expected contact email")
-			assert.NotEmpty(t, tt.got, "Email must be a non-empty string")
-			assert.True(t, emailRe.MatchString(tt.got), "Email must be in a valid email address format, got: %q", tt.got)
-		})
-	}
-}
-
-func TestConstantsImmutability(t *testing.T) {
-	// Verify that constants do not change between multiple accesses (immutability invariant).
-	tests := []struct {
-		name        string
-		firstRead   string
-		secondRead  string
-		description string
-	}{
-		{
-			name:        "Version is immutable across multiple reads",
-			firstRead:   internal.Version,
-			secondRead:  internal.Version,
-			description: "Version constant must not change between accesses",
-		},
-		{
-			name:        "Author is immutable across multiple reads",
-			firstRead:   internal.Author,
-			secondRead:  internal.Author,
-			description: "Author constant must not change between accesses",
-		},
-		{
-			name:        "Email is immutable across multiple reads",
-			firstRead:   internal.Email,
-			secondRead:  internal.Email,
-			description: "Email constant must not change between accesses",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.firstRead, tt.secondRead, tt.description)
-		})
-	}
-}
-
-func TestPackageExposesExactlyThreeMetadataConstants(t *testing.T) {
-	// Validate that all three required metadata constants are exposed and non-empty.
-	tests := []struct {
-		name        string
-		value       string
-		description string
-	}{
-		{
-			name:        "Version constant is exposed",
-			value:       internal.Version,
-			description: "package must expose the Version constant",
-		},
-		{
-			name:        "Author constant is exposed",
-			value:       internal.Author,
-			description: "package must expose the Author constant",
-		},
-		{
-			name:        "Email constant is exposed",
-			value:       internal.Email,
-			description: "package must expose the Email constant",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.NotEmpty(t, tt.value, tt.description)
-		})
-	}
-}
-
-func TestVersionSemanticFormat(t *testing.T) {
-	// Additional invariant: version must be parseable as MAJOR.MINOR.PATCH with numeric parts.
-	tests := []struct {
-		name    string
-		version string
-	}{
-		{
-			name:    "Version follows strict semantic versioning format",
-			version: internal.Version,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			parts := strings.Split(tt.version, ".")
-			assert.Len(t, parts, 3, "semantic version must have exactly three dot-separated parts")
-			for _, part := range parts {
-				assert.NotEmpty(t, part, "each part of semantic version must be non-empty")
-				for _, ch := range part {
-					assert.True(t, ch >= '0' && ch <= '9', "each part of semantic version must be numeric, got char %q in %q", string(ch), part)
-				}
+			// Invariant: Value remains constant across repeated accesses.
+			if tc.wantConstantStr {
+				first := internal.Version
+				second := internal.Version
+				assert.Equal(t, first, second,
+					"Version must be constant across multiple accesses")
 			}
 		})
 	}
 }
 
-func TestEmailContainsAtSymbol(t *testing.T) {
+// ---------------------------------------------------------------------------
+// Author constant
+// ---------------------------------------------------------------------------
+
+func TestAuthor(t *testing.T) {
 	tests := []struct {
-		name  string
-		email string
+		name            string
+		scenario        string
+		wantValue       string
+		wantNonEmpty    bool
+		wantConstantStr bool
 	}{
 		{
-			name:  "Email contains exactly one @ symbol",
-			email: internal.Email,
+			name:            "accessing the package author attribute returns Abdullah Arshad",
+			scenario:        "accessing the package author attribute",
+			wantValue:       "Abdullah Arshad",
+			wantNonEmpty:    true,
+			wantConstantStr: true,
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			count := strings.Count(tt.email, "@")
-			assert.Equal(t, 1, count, "email address must contain exactly one '@' symbol, got %d in %q", count, tt.email)
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			// The constant value must equal exactly the expected string.
+			assert.Equal(t, tc.wantValue, internal.Author,
+				"Author should equal %q (scenario: %s)", tc.wantValue, tc.scenario)
+
+			// Invariant: Author is always a non-empty string.
+			if tc.wantNonEmpty {
+				assert.NotEmpty(t, internal.Author, "Author must not be empty")
+			}
+
+			// Invariant: Value remains constant across repeated accesses.
+			if tc.wantConstantStr {
+				first := internal.Author
+				second := internal.Author
+				assert.Equal(t, first, second,
+					"Author must be constant across multiple accesses")
+			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Email constant
+// ---------------------------------------------------------------------------
+
+func TestEmail(t *testing.T) {
+	tests := []struct {
+		name             string
+		scenario         string
+		wantValue        string
+		wantNonEmpty     bool
+		wantValidEmail   bool
+		wantConstantStr  bool
+	}{
+		{
+			name:            "accessing the package email attribute returns abdullah.arshad.314@gmail.com",
+			scenario:        "accessing the package email attribute",
+			wantValue:       "abdullah.arshad.314@gmail.com",
+			wantNonEmpty:    true,
+			wantValidEmail:  true,
+			wantConstantStr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			// The constant value must equal exactly the expected string.
+			assert.Equal(t, tc.wantValue, internal.Email,
+				"Email should equal %q (scenario: %s)", tc.wantValue, tc.scenario)
+
+			// Invariant: Email is always a non-empty string.
+			if tc.wantNonEmpty {
+				assert.NotEmpty(t, internal.Email, "Email must not be empty")
+			}
+
+			// Invariant: Email is a valid email address format.
+			if tc.wantValidEmail {
+				assert.Regexp(t, emailPattern, internal.Email,
+					"Email must be a valid email address format")
+
+				// Additional structural checks.
+				assert.True(t, strings.Contains(internal.Email, "@"),
+					"Email must contain '@'")
+				parts := strings.SplitN(internal.Email, "@", 2)
+				assert.Len(t, parts, 2, "Email must have exactly one '@'")
+				assert.NotEmpty(t, parts[0], "Email local-part must not be empty")
+				assert.NotEmpty(t, parts[1], "Email domain must not be empty")
+				assert.True(t, strings.Contains(parts[1], "."),
+					"Email domain must contain a dot")
+			}
+
+			// Invariant: Value remains constant across repeated accesses.
+			if tc.wantConstantStr {
+				first := internal.Email
+				second := internal.Email
+				assert.Equal(t, first, second,
+					"Email must be constant across multiple accesses")
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Global invariants
+// ---------------------------------------------------------------------------
+
+func TestGlobalInvariants(t *testing.T) {
+	tests := []struct {
+		name string
+		fn   func(t *testing.T)
+	}{
+		{
+			name: "package is importable without side effects",
+			fn: func(t *testing.T) {
+				// If we reached this point, the package was imported successfully.
+				// The mere existence of the test binary proves no import-time panic
+				// or side-effect occurred.
+				assert.NotPanics(t, func() {
+					_ = internal.Version
+					_ = internal.Author
+					_ = internal.Email
+				}, "Accessing package constants must not panic")
+			},
+		},
+		{
+			name: "all three metadata constants are exposed",
+			fn: func(t *testing.T) {
+				assert.NotEmpty(t, internal.Version, "Version must be exposed and non-empty")
+				assert.NotEmpty(t, internal.Author, "Author must be exposed and non-empty")
+				assert.NotEmpty(t, internal.Email, "Email must be exposed and non-empty")
+			},
+		},
+		{
+			name: "metadata values remain constant across multiple imports",
+			fn: func(t *testing.T) {
+				v1, v2 := internal.Version, internal.Version
+				a1, a2 := internal.Author, internal.Author
+				e1, e2 := internal.Email, internal.Email
+
+				assert.Equal(t, v1, v2, "Version is not constant")
+				assert.Equal(t, a1, a2, "Author is not constant")
+				assert.Equal(t, e1, e2, "Email is not constant")
+			},
+		},
+		{
+			name: "no executable logic or state mutation occurs beyond constant definitions",
+			fn: func(t *testing.T) {
+				// Accessing constants multiple times must always yield the same
+				// results, proving no mutable state is involved.
+				for i := 0; i < 5; i++ {
+					assert.Equal(t, "1.0.0", internal.Version)
+					assert.Equal(t, "Abdullah Arshad", internal.Author)
+					assert.Equal(t, "abdullah.arshad.314@gmail.com", internal.Email)
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, tc.fn)
 	}
 }
 ```
