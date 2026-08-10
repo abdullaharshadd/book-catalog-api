@@ -9,15 +9,38 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	app "migrated-app/internal"
+	"migrated-app/internal/config"
 )
 
 func main() {
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to load config")
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	db, err := app.NewDB(ctx, cfg.DatabaseURL)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to connect to database")
+	}
+	defer db.Close()
+
+	if err := db.InitSchema(ctx); err != nil {
+		log.Fatal().Err(err).Msg("failed to initialize schema")
+	}
+
+	addr := ":" + cfg.Port
+	if cfg.Port == "" {
+		addr = ":8080"
+	}
+
 	srv := &http.Server{
-		Addr:    ":8080",
-		Handler: buildRouter(),
+		Addr:    addr,
+		Handler: app.BuildRouter(db),
 	}
 
 	go func() {
@@ -26,7 +49,7 @@ func main() {
 		}
 	}()
 
-	log.Info().Msg("server started on :8080")
+	log.Info().Msgf("server started on %s", addr)
 	<-ctx.Done()
 
 	shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
