@@ -112,7 +112,7 @@ func (h *Handlers) ListBooks(w http.ResponseWriter, r *http.Request) {
 		FROM books ORDER BY id OFFSET $1 LIMIT $2`
 
 	var books []Book
-	if err := h.db.SQL().SelectContext(ctx, &books, query, skip, limit); err != nil {
+	if err := h.db.SelectContext(ctx, &books, query, skip, limit); err != nil {
 		log.Printf("Error retrieving books: %v", err)
 		writeError(w, http.StatusInternalServerError, "Internal server error while retrieving books")
 		return
@@ -120,7 +120,7 @@ func (h *Handlers) ListBooks(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]BookResponse, 0, len(books))
 	for i := range books {
-		resp = append(resp, NewBookResponse(&books[i]))
+		resp = append(resp, NewBookResponse(books[i]))
 	}
 
 	log.Printf("Retrieved %d books (skip=%d, limit=%d)", len(books), skip, limit)
@@ -149,7 +149,7 @@ func (h *Handlers) GetBook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("Retrieved book: %s", book.Title)
-	writeJSON(w, http.StatusOK, NewBookResponse(book))
+	writeJSON(w, http.StatusOK, NewBookResponse(*book))
 }
 
 // CreateBook handles POST /books/ — creates a new book.
@@ -174,7 +174,7 @@ func (h *Handlers) CreateBook(w http.ResponseWriter, r *http.Request) {
 		RETURNING id, title, author, published_year, summary, created_at`
 
 	var book Book
-	err := h.db.SQL().QueryRowxContext(ctx, query,
+	err := h.db.QueryRowxContext(ctx, query,
 		in.Title, in.Author, in.PublishedYear, in.Summary,
 	).StructScan(&book)
 	if isUniqueViolation(err) {
@@ -189,7 +189,7 @@ func (h *Handlers) CreateBook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("Created new book: %s by %s", book.Title, book.Author)
-	writeJSON(w, http.StatusCreated, NewBookResponse(&book))
+	writeJSON(w, http.StatusCreated, NewBookResponse(book))
 }
 
 // UpdateBook handles PUT /books/{book_id} — partially updates a book.
@@ -263,7 +263,7 @@ func (h *Handlers) UpdateBook(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "Internal server error while updating book")
 			return
 		}
-		writeJSON(w, http.StatusOK, NewBookResponse(book))
+		writeJSON(w, http.StatusOK, NewBookResponse(*book))
 		return
 	}
 
@@ -273,7 +273,7 @@ func (h *Handlers) UpdateBook(w http.ResponseWriter, r *http.Request) {
 		join(setClauses, ", "), argIdx)
 
 	var book Book
-	err := h.db.SQL().QueryRowxContext(ctx, query, args...).StructScan(&book)
+	err := h.db.QueryRowxContext(ctx, query, args...).StructScan(&book)
 	if errors.Is(err, sql.ErrNoRows) {
 		log.Printf("Book with ID %d not found for update", bookID)
 		writeError(w, http.StatusNotFound, fmt.Sprintf("Book with ID %d not found", bookID))
@@ -291,7 +291,7 @@ func (h *Handlers) UpdateBook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("Updated book: %s", book.Title)
-	writeJSON(w, http.StatusOK, NewBookResponse(&book))
+	writeJSON(w, http.StatusOK, NewBookResponse(book))
 }
 
 // DeleteBook handles DELETE /books/{book_id} — deletes a book by ID.
@@ -306,7 +306,7 @@ func (h *Handlers) DeleteBook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	const query = `DELETE FROM books WHERE id = $1`
-	res, err := h.db.SQL().ExecContext(ctx, query, bookID)
+	res, err := h.db.ExecContext(ctx, query, bookID)
 	if err != nil {
 		log.Printf("Error deleting book %d: %v", bookID, err)
 		writeError(w, http.StatusInternalServerError, "Internal server error while deleting book")
@@ -334,7 +334,7 @@ func (h *Handlers) findBook(ctx context.Context, id int64) (*Book, error) {
 	const query = `SELECT id, title, author, published_year, summary, created_at
 		FROM books WHERE id = $1`
 	var book Book
-	if err := h.db.SQL().GetContext(ctx, &book, query, id); err != nil {
+	if err := h.db.GetContext(ctx, &book, query, id); err != nil {
 		return nil, err
 	}
 	return &book, nil
