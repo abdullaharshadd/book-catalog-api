@@ -150,7 +150,7 @@ func (b *BookUpdate) Validate() error {
 // analog of the Pydantic BookResponse model (from_attributes=True), which was
 // built directly from the ORM Book. NewBookResponse constructs it from a Book.
 type BookResponse struct {
-	ID            int     `json:"id"`
+	ID            int64   `json:"id"`
 	Title         string  `json:"title"`
 	Author        string  `json:"author"`
 	PublishedYear int     `json:"published_year"`
@@ -160,12 +160,17 @@ type BookResponse struct {
 // NewBookResponse builds a BookResponse from a Book model. This replaces
 // Pydantic's from_attributes / model_validate(orm_obj) behavior.
 func NewBookResponse(b Book) BookResponse {
+	var summary *string
+	if b.Summary != "" {
+		s := b.Summary
+		summary = &s
+	}
 	return BookResponse{
 		ID:            b.ID,
 		Title:         b.Title,
 		Author:        b.Author,
 		PublishedYear: b.PublishedYear,
-		Summary:       b.Summary,
+		Summary:       summary,
 	}
 }
 
