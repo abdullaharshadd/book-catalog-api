@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
 	"github.com/rs/zerolog/log"
 )
 
@@ -139,7 +140,7 @@ func (h *BookHandler) CreateBook(w http.ResponseWriter, r *http.Request) {
 		book.Title, book.Author, book.PublishedYear, book.Summary,
 	).StructScan(book)
 	if err != nil {
-		if IsUniqueViolation(err) {
+		if isUniqueViolation(err) {
 			log.Error().Err(err).Msg("integrity error creating book")
 			writeError(w, http.StatusBadRequest, "Book with this title and author already exists")
 			return
@@ -195,7 +196,7 @@ func (h *BookHandler) UpdateBook(w http.ResponseWriter, r *http.Request) {
 		book.Title, book.Author, book.PublishedYear, book.Summary, bookID,
 	).StructScan(book)
 	if err != nil {
-		if IsUniqueViolation(err) {
+		if isUniqueViolation(err) {
 			log.Error().Err(err).Msg("integrity error updating book")
 			writeError(w, http.StatusBadRequest, "Book with this title and author already exists")
 			return
@@ -310,6 +311,14 @@ func parseIntDefault(s string, def int) int {
 		return def
 	}
 	return v
+}
+
+func isUniqueViolation(err error) bool {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		return pqErr.Code == "23505"
+	}
+	return false
 }
 
 func BuildRouter(db *sqlx.DB) http.Handler {
