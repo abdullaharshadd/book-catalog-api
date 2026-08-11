@@ -9,15 +9,33 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"migrated-app/internal"
+	"migrated-app/internal/config"
 )
 
 func main() {
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to load config")
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	db, err := internal.NewDB(ctx, cfg.DatabaseURL)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to connect to database")
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			log.Error().Err(err).Msg("error closing database")
+		}
+	}()
+
 	srv := &http.Server{
 		Addr:    ":8080",
-		Handler: buildRouter(),
+		Handler: internal.BuildRouter(db.DB),
 	}
 
 	go func() {
