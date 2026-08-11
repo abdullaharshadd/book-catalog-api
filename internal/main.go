@@ -258,12 +258,14 @@ func (h *BookHandler) fetchBook(ctx context.Context, q *sqlx.DB, id int64) (*Boo
 
 func bookFromCreate(in *BookCreate) *Book {
 	b := &Book{
-		Title:         in.Title,
-		Author:        in.Author,
-		PublishedYear: in.PublishedYear,
+		Title:  in.Title,
+		Author: in.Author,
 	}
-	if in.Summary != nil {
-		b.Summary = sql.NullString{String: *in.Summary, Valid: true}
+	if in.PublishedYear != nil {
+		b.PublishedYear = *in.PublishedYear
+	}
+	if in.Description != nil {
+		b.Summary = sql.NullString{String: *in.Description, Valid: true}
 	}
 	return b
 }
