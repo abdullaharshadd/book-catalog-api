@@ -1,21 +1,12 @@
 package internal
 
-import "fmt"
+import (
+	"database/sql"
+	"fmt"
+	"time"
+)
 
 // Book represents a book in the catalog.
-//
-// This replaces the SQLAlchemy declarative model from app/models.py. The
-// underlying "books" table is created by internal/database.go at startup;
-// this file defines the Go-side domain type and its field mapping.
-//
-// Field declaration order (Title, Author, PublishedYear, Summary) mirrors the
-// source model so validation error ordering stays consistent with the original
-// Pydantic/SQLAlchemy behaviour.
-//
-// The composite uniqueness of (title, author) — the source's
-// UniqueConstraint('title', 'author', name='unique_title_author') — is enforced
-// at the database level via a UNIQUE constraint in the schema DDL, not in this
-// struct.
 type Book struct {
 	// ID is the primary key, auto-incrementing (SERIAL/IDENTITY in PostgreSQL).
 	ID int64 `json:"id" db:"id"`
@@ -26,23 +17,26 @@ type Book struct {
 	// Author is the book author (required).
 	Author string `json:"author" db:"author"`
 
-	// PublishedYear is the year the book was published (required).
-	PublishedYear int `json:"published_year" db:"published_year"`
+	// Description is an optional description of the book.
+	Description sql.NullString `json:"description" db:"description"`
 
-	// Summary is an optional description of the book. It maps to a nullable
-	// TEXT column; an empty string represents the absence of a summary.
-	Summary string `json:"summary" db:"summary"`
+	// Published indicates whether the book has been published.
+	Published bool `json:"published" db:"published"`
+
+	// CreatedAt is the timestamp when the record was created.
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
+
+	// UpdatedAt is the timestamp when the record was last updated.
+	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }
 
-// String returns a human-readable representation of the book, replacing the
-// source model's __str__ dunder method.
+// String returns a human-readable representation of the book.
 func (b Book) String() string {
-	return fmt.Sprintf("%s by %s (%d)", b.Title, b.Author, b.PublishedYear)
+	return fmt.Sprintf("%s by %s", b.Title, b.Author)
 }
 
-// GoString returns a debug representation of the book, replacing the source
-// model's __repr__ dunder method. It is used by the %#v verb in fmt.
+// GoString returns a debug representation of the book.
 func (b Book) GoString() string {
-	return fmt.Sprintf("<Book(id=%d, title='%s', author='%s', year=%d)>",
-		b.ID, b.Title, b.Author, b.PublishedYear)
+	return fmt.Sprintf("<Book(id=%d, title='%s', author='%s')>",
+		b.ID, b.Title, b.Author)
 }
