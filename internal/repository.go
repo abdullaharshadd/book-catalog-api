@@ -12,17 +12,6 @@ import (
 // ErrDuplicateBook is returned when a book with the same title and author already exists.
 var ErrDuplicateBook = errors.New("duplicate book")
 
-// Book is the internal database model for a book.
-type Book struct {
-	ID          int64
-	Title       string
-	Author      string
-	Description sql.NullString
-	Published   bool
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-}
-
 // BookResponse is the JSON-serialisable representation of a Book.
 type BookResponse struct {
 	ID          int64   `json:"id"`
