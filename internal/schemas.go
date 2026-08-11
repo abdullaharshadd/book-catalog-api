@@ -1,7 +1,6 @@
 package internal
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -47,107 +46,6 @@ type ValidationError struct {
 // Error implements the error interface for ValidationError.
 func (e *ValidationError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Field, e.Message)
-}
-
-// schemaCreateRequest is the DTO for creating a book. It replaces the Pydantic
-// BookCreate schema. Title, Author and PublishedYear are required; Summary is
-// optional.
-type schemaCreateRequest struct {
-	Title         string  `json:"title"`
-	Author        string  `json:"author"`
-	PublishedYear int     `json:"published_year"`
-	Summary       *string `json:"summary"`
-
-	// presence tracks which fields were present in the incoming JSON so that
-	// Validate can emit "missing" errors for required fields that were omitted,
-	// matching Pydantic's "Field required" behaviour.
-	presence map[string]bool
-}
-
-// schemaUpdateRequest is the DTO for partially updating a book. It replaces the
-// Pydantic BookUpdate schema, where every field is optional. Nil pointers mean
-// the field was omitted by the client and must be left untouched.
-type schemaUpdateRequest struct {
-	Title         *string `json:"title"`
-	Author        *string `json:"author"`
-	PublishedYear *int    `json:"published_year"`
-	Summary       *string `json:"summary"`
-
-	// summaryPresent records whether the "summary" key was present in the
-	// incoming JSON, distinguishing an explicit null from an omitted field.
-	summaryPresent bool
-}
-
-// UnmarshalJSON decodes a CreateRequest while recording which top-level keys
-// were present in the source document. This lets Validate distinguish a missing
-// required field from a blank one.
-func (r *CreateRequest) UnmarshalJSON(data []byte) error {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-
-	inner := schemaCreateRequest{}
-	inner.presence = make(map[string]bool, len(raw))
-	for k := range raw {
-		inner.presence[k] = true
-	}
-
-	type alias struct {
-		Title         string  `json:"title"`
-		Author        string  `json:"author"`
-		PublishedYear int     `json:"published_year"`
-		Summary       *string `json:"summary"`
-	}
-	var a alias
-	if err := json.Unmarshal(data, &a); err != nil {
-		return err
-	}
-	inner.Title = a.Title
-	inner.Author = a.Author
-	inner.PublishedYear = a.PublishedYear
-	inner.Summary = a.Summary
-
-	r.Title = inner.Title
-	r.Author = inner.Author
-	r.schemaPresence = inner.presence
-	r.schemaPublishedYear = inner.PublishedYear
-	r.schemaSummary = inner.Summary
-	return nil
-}
-
-// UnmarshalJSON decodes an UpdateRequest, tracking presence of the optional
-// summary field so an explicit null can be told apart from omission.
-func (r *UpdateRequest) UnmarshalJSON(data []byte) error {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-
-	inner := schemaUpdateRequest{}
-	_, inner.summaryPresent = raw["summary"]
-
-	type alias struct {
-		Title         *string `json:"title"`
-		Author        *string `json:"author"`
-		PublishedYear *int    `json:"published_year"`
-		Summary       *string `json:"summary"`
-	}
-	var a alias
-	if err := json.Unmarshal(data, &a); err != nil {
-		return err
-	}
-	inner.Title = a.Title
-	inner.Author = a.Author
-	inner.PublishedYear = a.PublishedYear
-	inner.Summary = a.Summary
-
-	r.Title = inner.Title
-	r.Author = inner.Author
-	r.schemaPublishedYear = inner.PublishedYear
-	r.schemaSummary = inner.Summary
-	r.schemaSummaryPresent = inner.summaryPresent
-	return nil
 }
 
 // validateTitle reproduces the Pydantic validate_title rule: reject empty or
