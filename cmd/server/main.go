@@ -4,17 +4,20 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/rs/zerolog/log"
 
 	"bookcatalogapi/internal"
 )
 
 func main() {
-	db, err := internal.NewDB()
+	sqlDB, err := internal.NewDB()
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to connect to database")
 	}
-	defer db.Close()
+	defer sqlDB.Close()
+
+	db := sqlx.NewDb(sqlDB, "postgres")
 
 	router := internal.BuildRouter(db)
 
