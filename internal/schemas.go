@@ -91,16 +91,6 @@ func currentYear() int {
 
 // BookCreate is the request payload for creating a book. It corresponds to the
 // Pydantic BookCreate schema.
-type BookCreate struct {
-	// Title is the book title (required, 1..255 chars after trimming).
-	Title string `json:"title"`
-	// Author is the book author (required, 1..255 chars after trimming).
-	Author string `json:"author"`
-	// PublishedYear is the year of publication (1000..current year).
-	PublishedYear int `json:"published_year"`
-	// Summary is an optional free-text summary (<=2000 chars after trimming).
-	Summary *string `json:"summary,omitempty"`
-}
 
 // Validate applies the same rules as the Pydantic BookCreate field validators.
 // It trims string fields in place (replicating str_strip_whitespace) and
@@ -131,12 +121,14 @@ func (b *BookCreate) Validate() error {
 	}
 
 	// published_year
-	if err := validatePublishedYear(b.PublishedYear); err != nil {
-		ve.Errors = append(ve.Errors, *err)
+	if b.PublishedYear != nil {
+		if err := validatePublishedYear(*b.PublishedYear); err != nil {
+			ve.Errors = append(ve.Errors, *err)
+		}
 	}
 
-	// summary
-	b.Summary = normalizeSummary(b.Summary, ve)
+	// description (mapped to summary slot)
+	b.Description = normalizeSummaryPtr(b.Description, ve)
 
 	if len(ve.Errors) > 0 {
 		return ve
@@ -242,6 +234,23 @@ func normalizeSummary(v *string, ve *ValidationError) *string {
 	}
 	if len(trimmed) > maxSummaryLen {
 		ve.Errors = append(ve.Errors, newFieldError("summary", "ensure this value has at most 2000 characters"))
+		return v
+	}
+	return &trimmed
+}
+
+// normalizeSummaryPtr is the same as normalizeSummary but uses the "description"
+// field name in any error, for use with BookCreate.Description.
+func normalizeSummaryPtr(v *string, ve *ValidationError) *string {
+	if v == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*v)
+	if trimmed == "" {
+		return nil
+	}
+	if len(trimmed) > maxSummaryLen {
+		ve.Errors = append(ve.Errors, newFieldError("description", "ensure this value has at most 2000 characters"))
 		return v
 	}
 	return &trimmed
