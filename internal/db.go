@@ -1,19 +1,8 @@
 package internal
 
 import (
-	"os"
 	"database/sql"
 )
-
-func getDBURL() string {
-	if v := os.Getenv("DATABASE_URL"); v != "" {
-		return v
-	}
-	if v := os.Getenv("DB_URL"); v != "" {
-		return v
-	}
-	return "postgres://app:app@db:5432/app?sslmode=disable"
-}
 
 // createSchema ensures the books table and its indexes/constraints exist.
 func createSchema(db *sql.DB) error {
