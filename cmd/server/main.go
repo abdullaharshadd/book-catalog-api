@@ -9,15 +9,48 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"migrated-app/internal"
+	"migrated-app/internal/config"
 )
 
 func main() {
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to load config")
+	}
+
+	dsn := cfg.DatabaseURL
+	if dsn == "" {
+		dsn = os.Getenv("DATABASE_URL")
+	}
+	if dsn == "" {
+		log.Fatal().Msg("DATABASE_URL must be set")
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	db, err := internal.NewDB(ctx, dsn)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to connect to database")
+	}
+	defer db.Close()
+
+	if err := db.InitSchema(ctx); err != nil {
+		log.Fatal().Err(err).Msg("failed to initialize schema")
+	}
+
+	internal.InitServer(db.DB)
+
+	port := cfg.Port
+	if port == "" {
+		port = "8080"
+	}
+
 	srv := &http.Server{
-		Addr:    ":8080",
-		Handler: buildRouter(),
+		Addr:    ":" + port,
+		Handler: internal.BuildRouter(),
 	}
 
 	go func() {
@@ -26,7 +59,7 @@ func main() {
 		}
 	}()
 
-	log.Info().Msg("server started on :8080")
+	log.Info().Msgf("server started on :%s", port)
 	<-ctx.Done()
 
 	shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
