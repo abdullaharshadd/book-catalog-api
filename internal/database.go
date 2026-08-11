@@ -69,5 +69,26 @@ func NewDB() (*sql.DB, error) {
 		return nil, fmt.Errorf("ping: %w", err)
 	}
 
+	if err := createSchema(db); err != nil {
+		return nil, fmt.Errorf("create schema: %w", err)
+	}
+
 	return db, nil
+}
+
+func createSchema(db *sql.DB) error {
+	_, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS books (
+			id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+			title         VARCHAR(255) NOT NULL,
+			author        VARCHAR(255) NOT NULL,
+			published_year INTEGER NOT NULL,
+			summary       TEXT,
+			CONSTRAINT unique_title_author UNIQUE (title, author)
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("create books table: %w", err)
+	}
+	return nil
 }
