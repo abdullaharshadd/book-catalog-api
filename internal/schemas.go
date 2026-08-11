@@ -217,12 +217,17 @@ type BookResponse struct {
 // NewBookResponse maps a domain Book (internal/model.go) into a BookResponse.
 // This replaces Pydantic's from_attributes/ORM-mode serialisation.
 func NewBookResponse(b *Book) *BookResponse {
+	var summary *string
+	if b.Summary != "" {
+		s := b.Summary
+		summary = &s
+	}
 	return &BookResponse{
 		ID:            b.ID,
 		Title:         b.Title,
 		Author:        b.Author,
 		PublishedYear: b.PublishedYear,
-		Summary:       b.Summary,
+		Summary:       summary,
 	}
 }
 
