@@ -22,7 +22,7 @@ import (
 //
 // MIGRATION_NOTE: FastAPI's Depends() dependency injection is replaced by an
 // explicit BookHandler struct constructed with NewBookHandler(db). Routes are
-// registered explicitly on a chi router in buildRouter().
+// registered explicitly on a chi router in BuildRouter().
 //
 // MIGRATION_NOTE: FastAPI's automatic Pydantic request/response serialization
 // and the custom HTTPException handler are replaced by explicit JSON decode,
@@ -100,7 +100,7 @@ func (h *BookHandler) ListBooks(w http.ResponseWriter, r *http.Request) {
 		limit = 0
 	}
 
-	const query = `SELECT id, title, author, published_year, summary, created_at, updated_at
+	const query = `SELECT id, title, author, published_year, summary
 		FROM books ORDER BY id OFFSET $1 LIMIT $2`
 
 	var books []Book
@@ -168,7 +168,7 @@ func (h *BookHandler) CreateBook(w http.ResponseWriter, r *http.Request) {
 
 	const query = `INSERT INTO books (title, author, published_year, summary)
 		VALUES ($1, $2, $3, $4)
-		RETURNING id, title, author, published_year, summary, created_at, updated_at`
+		RETURNING id, title, author, published_year, summary`
 
 	err := h.db.QueryRowxContext(ctx, query,
 		book.Title, book.Author, book.PublishedYear, book.Summary,
@@ -233,7 +233,7 @@ func (h *BookHandler) UpdateBook(w http.ResponseWriter, r *http.Request) {
 	const query = `UPDATE books
 		SET title = $1, author = $2, published_year = $3, summary = $4, updated_at = now()
 		WHERE id = $5
-		RETURNING id, title, author, published_year, summary, created_at, updated_at`
+		RETURNING id, title, author, published_year, summary`
 
 	err = h.db.QueryRowxContext(ctx, query,
 		book.Title, book.Author, book.PublishedYear, book.Summary, bookID,
@@ -292,8 +292,8 @@ func (h *BookHandler) DeleteBook(w http.ResponseWriter, r *http.Request) {
 }
 
 // fetchBook loads a single book by ID, returning sql.ErrNoRows if absent.
-func (h *BookHandler) fetchBook(ctx context, q *sqlx.DB, id int64) (*Book, error) {
-	const query = `SELECT id, title, author, published_year, summary, created_at, updated_at
+func (h *BookHandler) fetchBook(ctx context.Context, q *sqlx.DB, id int64) (*Book, error) {
+	const query = `SELECT id, title, author, published_year, summary
 		FROM books WHERE id = $1`
 	var book Book
 	if err := q.GetContext(ctx, &book, query, id); err != nil {
@@ -367,14 +367,14 @@ func parseIntDefault(s string, def int) int {
 	return v
 }
 
-// buildRouter wires all HTTP routes for the Book Catalog API onto a chi router
+// BuildRouter wires all HTTP routes for the Book Catalog API onto a chi router
 // and returns it as an http.Handler. cmd/server/main.go calls this directly.
 //
 // MIGRATION_NOTE: The FastAPI @app.on_event("startup") hook called init_db().
 // Startup/schema initialization (InitDB) is owned by the application entry
 // point (cmd/server/main.go) which constructs the *sqlx.DB via NewDB before
-// calling buildRouter, rather than being a router concern.
-func buildRouter(db *sqlx.DB) http.Handler {
+// calling BuildRouter, rather than being a router concern.
+func BuildRouter(db *sqlx.DB) http.Handler {
 	h := NewBookHandler(db)
 
 	r := chi.NewRouter()
@@ -396,4 +396,9 @@ func buildRouter(db *sqlx.DB) http.Handler {
 	r.Delete("/books/{book_id}", h.DeleteBook)
 
 	return r
+}
+
+// buildRouter is kept as an internal alias for test helpers that call it directly.
+func buildRouter(db *sqlx.DB) http.Handler {
+	return BuildRouter(db)
 }
