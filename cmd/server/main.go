@@ -6,7 +6,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"book-catalog-api/internal"
+	"book_catalog_api/internal"
 )
 
 func main() {
