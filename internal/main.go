@@ -148,7 +148,7 @@ func (s *BookServer) listBooks(w http.ResponseWriter, r *http.Request) {
 	// nil/empty slice must serialize as [] not null.
 	resp := make([]BookResponse, 0, len(books))
 	for i := range books {
-		resp = append(resp, NewBookResponse(&books[i]))
+		resp = append(resp, NewBookResponse(books[i]))
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -191,7 +191,7 @@ func (s *BookServer) getBook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("Retrieved book: %s", book.Title)
-	writeJSON(w, http.StatusOK, NewBookResponse(&book))
+	writeJSON(w, http.StatusOK, NewBookResponse(book))
 }
 
 // createBook is POST /books/ — creates a new book, 201 on success, 400 on
@@ -232,7 +232,7 @@ func (s *BookServer) createBook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("Created new book: %s by %s", book.Title, book.Author)
-	writeJSON(w, http.StatusCreated, NewBookResponse(&book))
+	writeJSON(w, http.StatusCreated, NewBookResponse(book))
 }
 
 // updateBook is PUT /books/{book_id} — partially updates an existing book
@@ -308,7 +308,7 @@ func (s *BookServer) updateBook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("Updated book: %s", book.Title)
-	writeJSON(w, http.StatusOK, NewBookResponse(&book))
+	writeJSON(w, http.StatusOK, NewBookResponse(book))
 }
 
 // deleteBook is DELETE /books/{book_id} — deletes a book by ID, 204 on
@@ -348,26 +348,26 @@ func (s *BookServer) deleteBook(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// serverDB is the package-level database handle wired into buildRouter. It is
+// serverDB is the package-level database handle wired into BuildRouter. It is
 // initialized by InitServer (called from cmd/server/main.go after opening the
-// pool) so buildRouter can keep the exact signature required by the entry
+// pool) so BuildRouter can keep the exact signature required by the entry
 // point.
 //
-// MIGRATION_NOTE: buildRouter's required signature is func() http.Handler with
+// MIGRATION_NOTE: BuildRouter's required signature is func() http.Handler with
 // no arguments, so the *sqlx.DB is threaded in via this package variable rather
 // than a parameter. cmd/server/main.go must call InitServer(db) before
-// buildRouter().
+// BuildRouter().
 var serverDB *sqlx.DB
 
 // InitServer records the database handle used by the HTTP handlers. Call this
-// once at startup before buildRouter().
+// once at startup before BuildRouter().
 func InitServer(db *sqlx.DB) {
 	serverDB = db
 }
 
-// buildRouter wires all routes migrated from app/main.py onto a chi router and
+// BuildRouter wires all routes migrated from app/main.py onto a chi router and
 // returns it as an http.Handler. cmd/server/main.go calls this directly.
-func buildRouter() http.Handler {
+func BuildRouter() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
@@ -395,6 +395,11 @@ func buildRouter() http.Handler {
 	r.Delete("/books/{book_id}", srv.deleteBook)
 
 	return r
+}
+
+// buildRouter is kept as an unexported alias for internal use.
+func buildRouter() http.Handler {
+	return BuildRouter()
 }
 
 // ensure strings is referenced (used by potential future validation helpers);
