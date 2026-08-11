@@ -1,275 +1,243 @@
-# Book Catalog API
+# book-catalog-api
 
-A simple CRUD (Create, Read, Update, Delete) RESTful API for managing books, built with FastAPI, SQLAlchemy, and Pydantic.
+A REST API for managing a book catalog. Migrated from Python/Django to Go using the Go standard library.
 
-## Features
+> ⚠️ **Migration Confidence: 0%** — This codebase was automatically migrated but requires significant manual review before it is production-ready. Do not deploy without completing the steps in the [Manual Review Required](#manual-review-required) section.
 
-- **FastAPI**: Modern, fast web framework for building APIs
-- **SQLAlchemy**: SQL toolkit and Object-Relational Mapping (ORM) library
-- **Pydantic**: Data validation using Python type annotations
-- **Async Support**: Asynchronous database operations
-- **SQLite**: Lightweight database for development and testing
-- **Comprehensive Testing**: Unit and integration tests
-- **Auto-generated Documentation**: OpenAPI/Swagger docs
-- **Data Validation**: Input validation and error handling
+---
 
-## API Endpoints
+## Tech Stack
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/` | Root endpoint with API information |
-| GET | `/books/` | List all books (with pagination) |
-| GET | `/books/{id}` | Get a specific book by ID |
-| POST | `/books/` | Create a new book |
-| PUT | `/books/{id}` | Update an existing book |
-| DELETE | `/books/{id}` | Delete a book |
-| GET | `/health` | Health check endpoint |
-| GET | `/docs` | Interactive API documentation (Swagger UI) |
-| GET | `/redoc` | Alternative API documentation (ReDoc) |
+| Layer | Technology |
+|---|---|
+| Language | Go (standard library) |
+| Web framework | `net/http` (Go standard library) |
+| Database | TBD — verify in `app/database.go` after migration |
+| Testing | Go `testing` package |
 
-## Book Model
+---
 
-Each book has the following fields:
+## Prerequisites
 
-- **id**: Integer (auto-generated primary key)
-- **title**: String (required, max 255 characters)
-- **author**: String (required, max 255 characters)  
-- **published_year**: Integer (required, must be between 1000 and current year)
-- **summary**: String (optional, max 2000 characters)
+- Go 1.21 or later
+- Node.js / npm (detected in setup commands — verify whether this is actually required for this project)
+- A running database instance (check `app/database.go` for the expected engine and connection details)
 
-**Note**: The combination of title and author must be unique.
+---
 
-## Quick Start
+## Getting Started
 
-### Prerequisites
+### 1. Clone the repository
 
-- Python 3.8 or higher
-- pip (Python package installer)
-
-### Installation
-
-1. **Clone the repository:**
 ```bash
-git clone <repository-url>
+git clone https://github.com/abdullaharshadd/book-catalog-api.git
 cd book-catalog-api
 ```
 
-2. **Create a virtual environment:**
+### 2. Install dependencies
+
+The setup plan detected the following install command. Verify whether this applies to the Go project or is a leftover from the migration tooling:
+
 ```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+npm install
 ```
 
-3. **Install dependencies:**
+For Go dependencies:
+
 ```bash
-pip install -r requirements.txt
-# OR using pyproject.toml
-pip install -e .
+go mod tidy
 ```
 
-### Running the Application
+### 3. Environment variables
 
-1. **Start the development server:**
+No environment variables were detected automatically. However, you should verify the following files for any hardcoded configuration that should be extracted into environment variables:
+
+- `app/database.go` — database connection string
+- `app/main.go` — server host/port
+
+Copy and populate a `.env` file if one is provided, or set variables directly in your shell before running.
+
+### 4. Database setup
+
+No database setup command was detected during migration. You will need to manually:
+
+1. Create the database schema. Check `app/models.go` for table definitions.
+2. Run any required migrations or DDL scripts manually.
+
 ```bash
-uvicorn app.main:app --reload
+# Example — replace with the actual command once you have reviewed app/database.go
+# psql -U youruser -d yourdatabase -f schema.sql
 ```
 
-2. **Access the API:**
-- API Base URL: http://localhost:8000
-- Interactive Docs: http://localhost:8000/docs
-- Alternative Docs: http://localhost:8000/redoc
+### 5. Run the server
 
-### Example API Usage
+No run command was detected. Once you have verified `app/main.go`, the standard Go run command is:
 
-**Create a book:**
 ```bash
-curl -X POST "http://localhost:8000/books/" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "title": "The Great Gatsby",
-       "author": "F. Scott Fitzgerald", 
-       "published_year": 1925,
-       "summary": "A classic American novel set in the summer of 1922."
-     }'
+go run ./app/main.go
 ```
 
-**Get all books:**
+Or build and execute:
+
 ```bash
-curl -X GET "http://localhost:8000/books/"
+go build -o book-catalog-api ./app/main.go
+./book-catalog-api
 ```
 
-**Get a specific book:**
+---
+
+## Running Tests
+
+No test command was detected during migration. The standard Go test command is:
+
 ```bash
-curl -X GET "http://localhost:8000/books/1"
+go test ./...
 ```
 
-**Update a book:**
+For verbose output:
+
 ```bash
-curl -X PUT "http://localhost:8000/books/1" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "summary": "An updated summary of this classic novel."
-     }'
+go test -v ./...
 ```
 
-**Delete a book:**
-```bash
-curl -X DELETE "http://localhost:8000/books/1"
-```
+> ⚠️ The test suite requires manual rewriting before it will run. See [Known Limitations](#known-limitations) and [Manual Review Required](#manual-review-required) for details.
 
-## Testing
+---
 
-The project includes comprehensive unit and integration tests.
+## Environment Variables
 
-### Running Tests
+No environment variables were automatically detected. This table will need to be populated after reviewing the migrated source files.
 
-**Run all tests:**
-```bash
-pytest
-```
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| *(none detected)* | — | — | Review `app/database.go` and `app/main.go` |
 
-**Run tests with coverage:**
-```bash
-pytest --cov=app --cov-report=html
-```
+---
 
-**Run specific test files:**
-```bash
-pytest tests/test_models.py      # Test SQLAlchemy models
-pytest tests/test_schemas.py     # Test Pydantic schemas  
-pytest tests/test_api.py         # Test API endpoints
-```
+## Architecture Overview
 
-**Run tests with verbose output:**
-```bash
-pytest -v
-```
-
-### Test Structure
-
-```
-tests/
-├── test_models.py      # Unit tests for SQLAlchemy models
-├── test_schemas.py     # Unit tests for Pydantic schemas
-└── test_api.py         # Integration tests for API endpoints
-```
-
-## Project Structure
+The migrated Go project follows the module structure below, derived from the original Django application layout:
 
 ```
 book-catalog-api/
 ├── app/
-│   ├── __init__.py
-│   ├── main.py         # FastAPI application and endpoints
-│   ├── models.py       # SQLAlchemy database models
-│   ├── schemas.py      # Pydantic schemas for validation
-│   └── database.py     # Database configuration and session management
+│   ├── main.go         # Entry point, HTTP server setup, route registration
+│   ├── database.go     # Database connection and initialization
+│   ├── models.go       # Data model structs (migrated from Django ORM models)
+│   └── schemas.go      # Request/response structs (migrated from Pydantic schemas)
 ├── tests/
-│   ├── __init__.py
-│   ├── test_models.py  # Model unit tests
-│   ├── test_schemas.py # Schema unit tests
-│   └── test_api.py     # API integration tests
-├── requirements.txt    # Python dependencies
-├── pyproject.toml     # Project configuration
-└── README.md          # This file
+│   ├── test_api.go     # API-level integration tests
+│   ├── test_models.go  # Model unit tests
+│   └── test_schemas.go # Schema/validation unit tests
+├── conftest.go         # Test fixtures and setup (partially unmigrable — see below)
+├── go.mod
+└── go.sum
 ```
 
-## Development
+**Request flow:**
 
-### Code Quality
-
-The project uses several tools to maintain code quality:
-
-**Format code:**
-```bash
-black app tests
+```
+HTTP Request → net/http ServeMux (main.go) → Handler function → models.go/database.go → Response
 ```
 
-**Sort imports:**
-```bash
-isort app tests  
+---
+
+## Migration Notes
+
+This project was automatically migrated from **Python/Django** to **Go/standard library**.
+
+### What changed
+
+| Concern | Original (Django) | Migrated (Go) |
+|---|---|---|
+| Web framework | Django views / URL conf | `net/http` handlers and `ServeMux` |
+| ORM | Django ORM (`models.Model`) | Manual struct definitions in `models.go` |
+| Serialization | Django REST Framework serializers or Pydantic schemas | Go structs with `encoding/json` |
+| Database sessions | Django ORM queryset / session management | Direct DB calls in `database.go` |
+| Test client | `django.test.Client` or FastAPI `TestClient` | Go `net/http/httptest` |
+| Test DB setup | `pytest-django` `@pytest.mark.django_db` | Requires manual implementation (see below) |
+| Dependency injection | FastAPI `Depends()` + `dependency_overrides` | Not applicable in Go standard library |
+| Configuration | Django `settings.py` | Environment variables or config struct in `main.go` |
+
+> **Note:** The migration metadata references both Django and FastAPI/SQLAlchemy patterns in the source. Review `app/main.go` and `app/database.go` carefully — the original project may have been partially FastAPI-based rather than pure Django.
+
+---
+
+## Known Limitations
+
+The following components could not be fully migrated and require manual implementation:
+
+### 1. `conftest.py` → `conftest.go` — `db_session_fixture`
+
+**Reason:** The original fixture used SQLAlchemy's `Base.metadata.create_all` / `drop_all` and `sessionmaker` to spin up and tear down a test database. Neither SQLAlchemy nor Django's test transaction rollback mechanism exists in Go.
+
+**Required action:** Implement test database setup and teardown manually in Go. Options:
+- Use a dedicated test database and run schema creation in `TestMain`.
+- Use a library such as [`testcontainers-go`](https://github.com/testcontainers/testcontainers-go) for isolated DB containers per test run.
+- Wrap tests in explicit transactions and roll back after each test.
+
+```go
+// Example pattern in tests/main_test.go
+func TestMain(m *testing.M) {
+    // setup: create schema
+    // m.Run()
+    // teardown: drop schema
+}
 ```
 
-**Lint code:**
-```bash
-flake8 app tests
+---
+
+### 2. `conftest.py` → `conftest.go` — `client_fixture`
+
+**Reason:** The original fixture used FastAPI's `app.dependency_overrides` to inject a test database session into the running application. This mechanism does not exist in Go's standard library.
+
+**Required action:** Replace with Go's `net/http/httptest` package. Since Go handlers receive dependencies via closure or a shared struct rather than injection, wire the test DB connection directly at handler construction time.
+
+```go
+// Example
+ts := httptest.NewServer(NewRouter(testDB))
+defer ts.Close()
 ```
 
-### Environment Variables
+---
 
-You can configure the database URL using environment variables:
+### 3. `tests/test_api.py` → `tests/test_api.go` — `test_db` fixture
 
-```bash
-export DATABASE_URL="sqlite:///./books.db"
-export ASYNC_DATABASE_URL="sqlite+aiosqlite:///./books.db"
-```
+**Reason:** The fixture created a SQLAlchemy engine and overrode FastAPI dependencies. Neither construct exists in the target stack.
 
-### Production Deployment
+**Required action:** Rewrite all API tests using `net/http/httptest`. Create a helper that returns an `*httptest.Server` wired to a test database, and use it in place of the original `TestClient`.
 
-For production deployment, you can use Gunicorn:
+---
 
-```bash
-gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker
-```
+## Manual Review Required
 
-Or with Docker:
+All 10 migrated modules have **low confidence** and must be reviewed by a developer before this codebase is used. The table below lists each file, its risk level, and what to check.
 
-```dockerfile
-FROM python:3.11-slim
+| File | Risk | What to verify |
+|---|---|---|
+| `app/main.go` | 🔴 High | Route registration, middleware, server startup, port configuration |
+| `app/database.go` | 🔴 High | Connection string, driver used, connection pool settings, error handling |
+| `app/models.go` | 🔴 High | All struct fields match the original schema; data types are correct; no fields dropped |
+| `app/schemas.go` | 🔴 High | JSON tags match expected API contract; validation logic preserved |
+| `tests/test_api.go` | 🔴 High | Tests will not compile or run until fixtures are rewritten (see Known Limitations) |
+| `conftest.go` | 🔴 High | Entirely unmigrable — must be rewritten from scratch |
+| `tests/test_models.go` | 🟡 Medium | Verify test logic matches original; DB fixture dependency |
+| `tests/test_schemas.go` | 🟡 Medium | Verify validation edge cases are preserved |
+| `app/__init__.py` (migrated) | 🟡 Medium | Confirm any package-level initialization was carried over |
+| `tests/__init__.py` (migrated) | 🟡 Medium | Confirm no test helpers were silently dropped |
 
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+### Recommended review order
 
-COPY app/ ./app/
+1. `app/database.go` — nothing else works without a valid DB connection.
+2. `app/models.go` — confirm the schema is correct.
+3. `app/main.go` — verify routes match the original API surface.
+4. `app/schemas.go` — verify the JSON contract is intact.
+5. Rewrite `conftest.go` test fixtures.
+6. `tests/test_api.go` — rewrite using `httptest`.
+7. `tests/test_models.go`, `tests/test_schemas.go` — update to use new fixtures.
 
-CMD ["gunicorn", "app.main:app", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000"]
-```
-
-## Architecture Highlights
-
-### Async Support
-- The `/books/` (GET) endpoint demonstrates proper async implementation
-- Uses `aiosqlite` for asynchronous SQLite operations
-- Async database session management
-
-### Data Validation
-- Comprehensive Pydantic schemas with custom validators
-- Input sanitization (whitespace trimming)
-- Realistic constraints (e.g., published year validation)
-
-### Error Handling
-- Proper HTTP status codes
-- Detailed error messages
-- Database integrity error handling
-- Logging for debugging
-
-### Testing Strategy
-- **Unit Tests**: Test individual components (models, schemas)
-- **Integration Tests**: Test complete API workflows
-- **Edge Cases**: Test validation, error conditions, and constraints
-- **CRUD Workflow**: Test complete create-read-update-delete cycles
-
-## API Documentation
-
-The API automatically generates comprehensive documentation:
-
-- **Swagger UI**: Interactive documentation at `/docs`
-- **ReDoc**: Alternative documentation at `/redoc`  
-- **OpenAPI Schema**: Raw schema available at `/openapi.json`
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
+---
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## Support
-
-For questions and support, please open an issue on the GitHub repository.
+Because migration confidence is 0%, please do not merge any changes to this repository until a full manual review has been completed and the test suite passes with `go test ./...`.
