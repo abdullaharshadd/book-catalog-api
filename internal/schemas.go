@@ -288,5 +288,9 @@ func NewBookResponse(b *Book) BookResponse {
 // summary as a sql.NullString or as a *string. This helper isolates that
 // decision in one place; update it to match the actual Book.Summary field type.
 func bookSummaryPtr(b *Book) *string {
-	return b.summaryPointer()
+	if !b.Summary.Valid {
+		return nil
+	}
+	s := b.Summary.String
+	return &s
 }
