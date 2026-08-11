@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -96,7 +97,7 @@ func (d *DB) WithTx(ctx context.Context, fn func(tx *sqlx.Tx) error) (err error)
 			panic(p)
 		}
 		if err != nil {
-			if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sqlx.ErrTx) {
+			if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
 				err = fmt.Errorf("database: rollback (original error: %v): %w", err, rbErr)
 			}
 		}
