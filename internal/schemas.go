@@ -49,10 +49,10 @@ func (e *ValidationError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Field, e.Message)
 }
 
-// CreateRequest is the DTO for creating a book. It replaces the Pydantic
+// schemaCreateRequest is the DTO for creating a book. It replaces the Pydantic
 // BookCreate schema. Title, Author and PublishedYear are required; Summary is
 // optional.
-type CreateRequest struct {
+type schemaCreateRequest struct {
 	Title         string  `json:"title"`
 	Author        string  `json:"author"`
 	PublishedYear int     `json:"published_year"`
@@ -64,76 +64,10 @@ type CreateRequest struct {
 	presence map[string]bool
 }
 
-// UnmarshalJSON decodes a CreateRequest while recording which top-level keys
-// were present in the source document. This lets Validate distinguish a missing
-// required field from a blank one.
-func (r *CreateRequest) UnmarshalJSON(data []byte) error {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-
-	r.presence = make(map[string]bool, len(raw))
-	for k := range raw {
-		r.presence[k] = true
-	}
-
-	type alias CreateRequest
-	var a alias
-	if err := json.Unmarshal(data, &a); err != nil {
-		return err
-	}
-	r.Title = a.Title
-	r.Author = a.Author
-	r.PublishedYear = a.PublishedYear
-	r.Summary = a.Summary
-	return nil
-}
-
-// Validate checks the CreateRequest against the same rules enforced by the
-// Pydantic BookCreate validators. On success it returns nil and normalises the
-// receiver's fields in place (whitespace trimmed, empty summary collapsed to
-// nil). On failure it returns the first ValidationError encountered, in source
-// field-declaration order (title, author, published_year, summary).
-func (r *CreateRequest) Validate() error {
-	if !r.presence["title"] {
-		return &ValidationError{Field: "title", Message: "Field required", Type: "missing"}
-	}
-	title, err := validateTitle(r.Title)
-	if err != nil {
-		return err
-	}
-	r.Title = title
-
-	if !r.presence["author"] {
-		return &ValidationError{Field: "author", Message: "Field required", Type: "missing"}
-	}
-	author, err := validateAuthor(r.Author)
-	if err != nil {
-		return err
-	}
-	r.Author = author
-
-	if !r.presence["published_year"] {
-		return &ValidationError{Field: "published_year", Message: "Field required", Type: "missing"}
-	}
-	if err := validatePublishedYear(r.PublishedYear); err != nil {
-		return err
-	}
-
-	summary, err := validateSummary(r.Summary)
-	if err != nil {
-		return err
-	}
-	r.Summary = summary
-
-	return nil
-}
-
-// UpdateRequest is the DTO for partially updating a book. It replaces the
+// schemaUpdateRequest is the DTO for partially updating a book. It replaces the
 // Pydantic BookUpdate schema, where every field is optional. Nil pointers mean
 // the field was omitted by the client and must be left untouched.
-type UpdateRequest struct {
+type schemaUpdateRequest struct {
 	Title         *string `json:"title"`
 	Author        *string `json:"author"`
 	PublishedYear *int    `json:"published_year"`
@@ -144,6 +78,44 @@ type UpdateRequest struct {
 	summaryPresent bool
 }
 
+// UnmarshalJSON decodes a CreateRequest while recording which top-level keys
+// were present in the source document. This lets Validate distinguish a missing
+// required field from a blank one.
+func (r *CreateRequest) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	inner := schemaCreateRequest{}
+	inner.presence = make(map[string]bool, len(raw))
+	for k := range raw {
+		inner.presence[k] = true
+	}
+
+	type alias struct {
+		Title         string  `json:"title"`
+		Author        string  `json:"author"`
+		PublishedYear int     `json:"published_year"`
+		Summary       *string `json:"summary"`
+	}
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	inner.Title = a.Title
+	inner.Author = a.Author
+	inner.PublishedYear = a.PublishedYear
+	inner.Summary = a.Summary
+
+	r.Title = inner.Title
+	r.Author = inner.Author
+	r.schemaPresence = inner.presence
+	r.schemaPublishedYear = inner.PublishedYear
+	r.schemaSummary = inner.Summary
+	return nil
+}
+
 // UnmarshalJSON decodes an UpdateRequest, tracking presence of the optional
 // summary field so an explicit null can be told apart from omission.
 func (r *UpdateRequest) UnmarshalJSON(data []byte) error {
@@ -151,84 +123,31 @@ func (r *UpdateRequest) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	_, r.summaryPresent = raw["summary"]
 
-	type alias UpdateRequest
+	inner := schemaUpdateRequest{}
+	_, inner.summaryPresent = raw["summary"]
+
+	type alias struct {
+		Title         *string `json:"title"`
+		Author        *string `json:"author"`
+		PublishedYear *int    `json:"published_year"`
+		Summary       *string `json:"summary"`
+	}
 	var a alias
 	if err := json.Unmarshal(data, &a); err != nil {
 		return err
 	}
-	r.Title = a.Title
-	r.Author = a.Author
-	r.PublishedYear = a.PublishedYear
-	r.Summary = a.Summary
+	inner.Title = a.Title
+	inner.Author = a.Author
+	inner.PublishedYear = a.PublishedYear
+	inner.Summary = a.Summary
+
+	r.Title = inner.Title
+	r.Author = inner.Author
+	r.schemaPublishedYear = inner.PublishedYear
+	r.schemaSummary = inner.Summary
+	r.schemaSummaryPresent = inner.summaryPresent
 	return nil
-}
-
-// Validate checks the UpdateRequest against the Pydantic BookUpdate validators.
-// Only fields that were supplied (non-nil) are validated. Supplied string
-// fields are normalised in place. It returns the first ValidationError, in
-// source field-declaration order.
-func (r *UpdateRequest) Validate() error {
-	if r.Title != nil {
-		title, err := validateTitle(*r.Title)
-		if err != nil {
-			return err
-		}
-		r.Title = &title
-	}
-
-	if r.Author != nil {
-		author, err := validateAuthor(*r.Author)
-		if err != nil {
-			return err
-		}
-		r.Author = &author
-	}
-
-	if r.PublishedYear != nil {
-		if err := validatePublishedYear(*r.PublishedYear); err != nil {
-			return err
-		}
-	}
-
-	if r.Summary != nil {
-		summary, err := validateSummary(r.Summary)
-		if err != nil {
-			return err
-		}
-		r.Summary = summary
-	}
-
-	return nil
-}
-
-// BookResponse is the DTO returned to clients. It replaces the Pydantic
-// BookResponse schema, whose from_attributes config mapped ORM instances into
-// the response shape; NewBookResponse performs that mapping explicitly.
-type BookResponse struct {
-	ID            int64   `json:"id"`
-	Title         string  `json:"title"`
-	Author        string  `json:"author"`
-	PublishedYear int     `json:"published_year"`
-	Summary       *string `json:"summary"`
-}
-
-// NewBookResponse maps a domain Book (internal/model.go) into a BookResponse.
-// This replaces Pydantic's from_attributes/ORM-mode serialisation.
-func NewBookResponse(b *Book) *BookResponse {
-	var summary *string
-	if b.Summary != "" {
-		s := b.Summary
-		summary = &s
-	}
-	return &BookResponse{
-		ID:            b.ID,
-		Title:         b.Title,
-		Author:        b.Author,
-		PublishedYear: b.PublishedYear,
-		Summary:       summary,
-	}
 }
 
 // validateTitle reproduces the Pydantic validate_title rule: reject empty or
