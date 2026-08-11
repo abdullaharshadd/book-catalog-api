@@ -1,46 +1,73 @@
 package internal
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"time"
 
-	"github.com/jmoiron/sqlx"
+	"github.com/rs/zerolog/log"
+
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-func getEnvDefault(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
+func getDBURL() string {
+	for _, env := range []string{"DATABASE_URL", "DB_URL"} {
+		if v := os.Getenv(env); v != "" {
+			return v
+		}
 	}
-	return def
+	user := os.Getenv("POSTGRES_USER")
+	if user == "" {
+		user = os.Getenv("DB_USER")
+	}
+	if user == "" {
+		user = "app"
+	}
+	password := os.Getenv("POSTGRES_PASSWORD")
+	if password == "" {
+		password = os.Getenv("DB_PASSWORD")
+	}
+	if password == "" {
+		password = "app"
+	}
+	host := os.Getenv("DB_HOST")
+	if host == "" {
+		host = "db"
+	}
+	port := os.Getenv("DB_PORT")
+	if port == "" {
+		port = "5432"
+	}
+	dbname := os.Getenv("POSTGRES_DB")
+	if dbname == "" {
+		dbname = os.Getenv("DB_NAME")
+	}
+	if dbname == "" {
+		dbname = "app"
+	}
+	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", user, password, host, port, dbname)
 }
 
-func NewDB() (*sqlx.DB, error) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = os.Getenv("DB_URL")
-	}
-	if dsn == "" {
-		host := getEnvDefault("DB_HOST", "db")
-		port := getEnvDefault("DB_PORT", "5432")
-		user := getEnvDefault("DB_USER", getEnvDefault("DB_USERNAME", getEnvDefault("POSTGRES_USER", "app")))
-		password := getEnvDefault("DB_PASSWORD", getEnvDefault("POSTGRES_PASSWORD", "app"))
-		dbname := getEnvDefault("DB_NAME", getEnvDefault("DB_DATABASE", getEnvDefault("POSTGRES_DB", "app")))
-		dsn = fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", user, password, host, port, dbname)
+func NewDB() (*sql.DB, error) {
+	dsn := getDBURL()
+	log.Info().Str("dsn", dsn).Msg("connecting to database")
+
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open: %w", err)
 	}
 
-	var db *sqlx.DB
-	var err error
 	for i := 0; i < 10; i++ {
-		db, err = sqlx.Open("pgx", dsn)
-		if err == nil {
-			err = db.Ping()
-			if err == nil {
-				return db, nil
-			}
+		if err = db.Ping(); err == nil {
+			break
 		}
-		time.Sleep(time.Duration(i+1) * time.Second)
+		log.Warn().Err(err).Int("attempt", i+1).Msg("waiting for database")
+		time.Sleep(2 * time.Second)
 	}
-	return nil, fmt.Errorf("ping: %w", err)
+	if err != nil {
+		return nil, fmt.Errorf("ping: %w", err)
+	}
+
+	return db, nil
 }
