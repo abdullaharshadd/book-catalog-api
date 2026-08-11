@@ -1,24 +1,170 @@
-I need to look at the source model to derive the schema. The Python model is `app/models.py` with a `Base` and presumably a `Book` entity (Book Catalog API). Since the model file isn't provided, I'll use the standard SQLAlchemy/Book Catalog conventions for a books table, deriving typical fields for a book catalog CRUD app.
+package internal
 
-Let me write an idiomatic Go database layer using database/sql with PostgreSQL, including schema creation at startup.
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"time"
 
-{
-  "code": "package internal\n\nimport (\n\t\"context\"\n\t\"database/sql\"\n\t\"fmt\"\n\t\"time\"\n\n\t_ \"github.com/jackc/pgx/v5/stdlib\"\n)\n\n// DB wraps a *sql.DB connection pool for the Book Catalog API.\n//\n// This replaces the SQLAlchemy engine/session machinery from app/database.py.\n// In Go we do not maintain a separate \"async\" and \"sync\" engine: database/sql\n// is inherently connection-pooled and every query already accepts a\n// context.Context, so a single pool serves both roles cleanly.\n//\n// The SQLAlchemy dependency-injection generators (get_db / get_sync_db) were\n// per-request session-with-rollback helpers. In idiomatic Go, transaction\n// scoping is handled explicitly at the call site via WithTx (below) rather\n// than through framework-managed generators, so those helpers have no direct\n// analogue and are intentionally not reproduced verbatim.\ntype DB struct {\n\tpool *sql.DB\n}\n\n// schemaDDL is the schema-bootstrap DDL, replacing SQLAlchemy's\n// Base.metadata.create_all(). It is derived from the source ORM model\n// (app/models.py Book entity) and targets PostgreSQL.\n//\n// MIGRATION_NOTE: app/models.py was not included in the provided context.\n// The columns below reflect the standard Book Catalog model fields for this\n// project. Verify against the real app/models.py Book model before deploying;\n// adjust column names/types here if they differ. The table name follows the\n// SQLAlchemy default of the lowercased class name (\"books\").\nconst schemaDDL = `\nCREATE TABLE IF NOT EXISTS books (\n    id          SERIAL PRIMARY KEY,\n    title       TEXT NOT NULL,\n    author      TEXT NOT NULL,\n    description TEXT,\n    published   BOOLEAN NOT NULL DEFAULT FALSE,\n    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),\n    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()\n);`\n\n// NewDB opens a PostgreSQL connection pool using the supplied DSN, verifies\n// connectivity, and returns a ready-to-use *DB.\n//\n// The DSN replaces the DATABASE_URL / ASYNC_DATABASE_URL environment variables\n// from the source; callers should source it from config.Config.DatabaseURL.\nfunc NewDB(ctx context.Context, dsn string) (*DB, error) {\n\tif dsn == \"\" {\n\t\treturn nil, fmt.Errorf(\"database: empty DSN\")\n\t}\n\n\tpool, err := sql.Open(\"pgx\", dsn)\n\tif err != nil {\n\t\treturn nil, fmt.Errorf(\"database: open pool: %w\", err)\n\t}\n\n\tpool.SetMaxOpenConns(25)\n\tpool.SetMaxIdleConns(25)\n\tpool.SetConnMaxLifetime(5 * time.Minute)\n\n\tpingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)\n\tdefer cancel()\n\tif err := pool.PingContext(pingCtx); err != nil {\n\t\t_ = pool.Close()\n\t\treturn nil, fmt.Errorf(\"database: ping: %w\", err)\n\t}\n\n\treturn &DB{pool: pool}, nil\n}\n\n// InitSchema creates all tables if they do not already exist. This is the Go\n// equivalent of the source's init_db()/Base.metadata.create_all() and should\n// be called once at application startup.\nfunc (db *DB) InitSchema(ctx context.Context) error {\n\tif _, err := db.pool.ExecContext(ctx, schemaDDL); err != nil {\n\t\treturn fmt.Errorf(\"database: init schema: %w\", err)\n\t}\n\treturn nil\n}\n\n// Pool exposes the underlying *sql.DB for repositories that need direct access.\nfunc (db *DB) Pool() *sql.DB {\n\treturn db.pool\n}\n\n// Close releases the underlying connection pool.\nfunc (db *DB) Close() error {\n\treturn db.pool.Close()\n}\n\n// WithTx runs fn inside a single transaction, committing on success and rolling\n// back on error or panic. This replaces the per-request session-with-rollback\n// behavior of the source's get_db / get_sync_db dependency generators, but\n// scoped explicitly to a unit of work rather than to an HTTP request.\nfunc (db *DB) WithTx(ctx context.Context, fn func(tx *sql.Tx) error) (err error) {\n\ttx, err := db.pool.BeginTx(ctx, nil)\n\tif err != nil {\n\t\treturn fmt.Errorf(\"database: begin tx: %w\", err)\n\t}\n\n\tdefer func() {\n\t\tif p := recover(); p != nil {\n\t\t\t_ = tx.Rollback()\n\t\t\tpanic(p)\n\t\t}\n\t\tif err != nil {\n\t\t\tif rbErr := tx.Rollback(); rbErr != nil && rbErr != sql.ErrTxDone {\n\t\t\t\terr = fmt.Errorf(\"database: rollback (original: %v): %w\", err, rbErr)\n\t\t\t}\n\t\t}\n\t}()\n\n\tif err = fn(tx); err != nil {\n\t\treturn err\n\t}\n\n\tif err = tx.Commit(); err != nil {\n\t\treturn fmt.Errorf(\"database: commit: %w\", err)\n\t}\n\treturn nil\n}\n\n// Pagination-related constants used to defensively clamp query limits.\n//\n// MIGRATION_NOTE: The source relied on SQLite semantics where LIMIT -1 means\n// \"no limit\". PostgreSQL rejects a negative LIMIT, so any repository building\n// paginated queries must clamp limit/offset via ClampPagination below rather\n// than passing user input straight through.\nconst (\n\t// DefaultPageLimit is the fallback page size when none is provided.\n\tDefaultPageLimit = 20\n\t// MaxPageLimit is the upper bound on a single page size.\n\tMaxPageLimit = 100\n)\n\n// ClampPagination normalizes a requested limit/offset into safe bounds for\n// PostgreSQL. A non-positive limit becomes DefaultPageLimit, values above\n// MaxPageLimit are capped, and a negative offset becomes 0.\nfunc ClampPagination(limit, offset int) (int, int) {\n\tif limit <= 0 {\n\t\tlimit = DefaultPageLimit\n\t}\n\tif limit > MaxPageLimit {\n\t\tlimit = MaxPageLimit\n\t}\n\tif offset < 0 {\n\t\toffset = 0\n\t}\n\treturn limit, offset\n}\n",
-  "target_path": "internal/database.go",
-  "notes": [
-    "app/models.py (the SQLAlchemy Base/Book model) was not included in context. The books table DDL uses standard Book Catalog fields (id, title, author, description, published, created_at, updated_at) following SQLAlchemy's default lowercased-class-name table convention; verify column names/types against the real model before deploying.",
-    "Collapsed the dual async/sync SQLAlchemy engines into a single database/sql pool — Go's pool is context-aware and inherently concurrent, so a two-engine split is unnecessary.",
-    "Replaced FastAPI-style get_db/get_sync_db generator dependencies with an explicit WithTx unit-of-work helper. Wire this into handlers/repositories at call sites rather than as request-scoped middleware.",
-    "Retargeted from SQLite/original dialect to PostgreSQL per requirements: SERIAL PK, RETURNING-based inserts should be used in repositories, and $1-style placeholders.",
-    "Added ClampPagination to defensively guard against the SQLite LIMIT -1 'no limit' behavior, which PostgreSQL does not support.",
-    "Uses github.com/jackc/pgx/v5/stdlib as the database/sql driver; add it to go.mod."
-  ],
-  "unmigrable_components": [
-    {
-      "name": "get_db / get_sync_db",
-      "reason": "These are FastAPI dependency-injection generators that yield a per-request session with framework-managed rollback/close. Go has no yield-based DI framework equivalent and idiomatic Go scopes transactions explicitly.",
-      "suggestion": "Use DB.WithTx for transactional units of work and DB.Pool()/repository methods for single non-transactional queries. Inject *DB into repositories via constructors."
-    }
-  ],
-  "requires_manual_review": true
+	_ "github.com/lib/pq"
+)
+
+// DB wraps a *sql.DB connection pool for the Book Catalog API.
+//
+// This replaces the SQLAlchemy engine/session machinery from app/database.py.
+// In Go we do not maintain a separate "async" and "sync" engine: database/sql
+// is inherently connection-pooled and every query already accepts a
+// context.Context, so a single pool serves both roles cleanly.
+//
+// The SQLAlchemy dependency-injection generators (get_db / get_sync_db) were
+// per-request session-with-rollback helpers. In idiomatic Go, transaction
+// scoping is handled explicitly at the call site via WithTx (below) rather
+// than through framework-managed generators, so those helpers have no direct
+// analogue and are intentionally not reproduced verbatim.
+type DB struct {
+	pool *sql.DB
+}
+
+// schemaDDL is the schema-bootstrap DDL, replacing SQLAlchemy's
+// Base.metadata.create_all(). It is derived from the source ORM model
+// (app/models.py Book entity) and targets PostgreSQL.
+//
+// MIGRATION_NOTE: app/models.py was not included in the provided context.
+// The columns below reflect the standard Book Catalog model fields for this
+// project. Verify against the real app/models.py Book model before deploying;
+// adjust column names/types here if they differ. The table name follows the
+// SQLAlchemy default of the lowercased class name ("books").
+const schemaDDL = `
+CREATE TABLE IF NOT EXISTS books (
+    id          SERIAL PRIMARY KEY,
+    title       TEXT NOT NULL,
+    author      TEXT NOT NULL,
+    description TEXT,
+    published   BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);`
+
+// NewDB opens a PostgreSQL connection pool using the supplied DSN, verifies
+// connectivity, and returns a ready-to-use *DB.
+//
+// The DSN replaces the DATABASE_URL / ASYNC_DATABASE_URL environment variables
+// from the source; callers should source it from config.Config.DatabaseURL.
+func NewDB(ctx context.Context, dsn string) (*DB, error) {
+	if dsn == "" {
+		return nil, fmt.Errorf("database: empty DSN")
+	}
+
+	pool, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("database: open pool: %w", err)
+	}
+
+	pool.SetMaxOpenConns(25)
+	pool.SetMaxIdleConns(25)
+	pool.SetConnMaxLifetime(5 * time.Minute)
+
+	// Retry ping with backoff to handle DB container startup race.
+	var pingErr error
+	for i := 0; i < 10; i++ {
+		pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		pingErr = pool.PingContext(pingCtx)
+		cancel()
+		if pingErr == nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			_ = pool.Close()
+			return nil, fmt.Errorf("database: ping cancelled: %w", ctx.Err())
+		case <-time.After(time.Duration(i+1) * time.Second):
+		}
+	}
+	if pingErr != nil {
+		_ = pool.Close()
+		return nil, fmt.Errorf("database: ping: %w", pingErr)
+	}
+
+	return &DB{pool: pool}, nil
+}
+
+// InitSchema creates all tables if they do not already exist. This is the Go
+// equivalent of the source's init_db()/Base.metadata.create_all() and should
+// be called once at application startup.
+func (db *DB) InitSchema(ctx context.Context) error {
+	if _, err := db.pool.ExecContext(ctx, schemaDDL); err != nil {
+		return fmt.Errorf("database: init schema: %w", err)
+	}
+	return nil
+}
+
+// Pool exposes the underlying *sql.DB for repositories that need direct access.
+func (db *DB) Pool() *sql.DB {
+	return db.pool
+}
+
+// Close releases the underlying connection pool.
+func (db *DB) Close() error {
+	return db.pool.Close()
+}
+
+// WithTx runs fn inside a single transaction, committing on success and rolling
+// back on error or panic. This replaces the per-request session-with-rollback
+// behavior of the source's get_db / get_sync_db dependency generators, but
+// scoped explicitly to a unit of work rather than to an HTTP request.
+func (db *DB) WithTx(ctx context.Context, fn func(tx *sql.Tx) error) (err error) {
+	tx, err := db.pool.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("database: begin tx: %w", err)
+	}
+
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			panic(p)
+		}
+		if err != nil {
+			if rbErr := tx.Rollback(); rbErr != nil && rbErr != sql.ErrTxDone {
+				err = fmt.Errorf("database: rollback (original: %v): %w", err, rbErr)
+			}
+		}
+	}()
+
+	if err = fn(tx); err != nil {
+		return err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("database: commit: %w", err)
+	}
+	return nil
+}
+
+// Pagination-related constants used to defensively clamp query limits.
+//
+// MIGRATION_NOTE: The source relied on SQLite semantics where LIMIT -1 means
+// "no limit". PostgreSQL rejects a negative LIMIT, so any repository building
+// paginated queries must clamp limit/offset via ClampPagination below rather
+// than passing user input straight through.
+const (
+	// DefaultPageLimit is the fallback page size when none is provided.
+	DefaultPageLimit = 20
+	// MaxPageLimit is the upper bound on a single page size.
+	MaxPageLimit = 100
+)
+
+// ClampPagination normalizes a requested limit/offset into safe bounds for
+// PostgreSQL. A non-positive limit becomes DefaultPageLimit, values above
+// MaxPageLimit are capped, and a negative offset becomes 0.
+func ClampPagination(limit, offset int) (int, int) {
+	if limit <= 0 {
+		limit = DefaultPageLimit
+	}
+	if limit > MaxPageLimit {
+		limit = MaxPageLimit
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return limit, offset
 }
