@@ -1,30 +1,58 @@
 package config
 
 import (
-	"github.com/spf13/viper"
+	"fmt"
+	"os"
 )
 
 type Config struct {
-	DatabaseURL string `mapstructure:"DATABASE_URL"`
-	Port        string `mapstructure:"PORT"`
-	JWTSecret   string `mapstructure:"JWT_SECRET"`
+	DatabaseURL string
 }
 
 func Load() (*Config, error) {
-	viper.AutomaticEnv()
-
-	viper.SetDefault("DATABASE_URL", "postgres://app:app@db:5432/app?sslmode=disable")
-	viper.SetDefault("PORT", "8080")
-	viper.SetDefault("JWT_SECRET", "")
-
-	_ = viper.BindEnv("DATABASE_URL", "DATABASE_URL")
-	_ = viper.BindEnv("PORT", "PORT")
-	_ = viper.BindEnv("JWT_SECRET", "JWT_SECRET")
-
-	cfg := &Config{}
-	if err := viper.Unmarshal(cfg); err != nil {
-		return nil, err
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		dbURL = os.Getenv("DB_URL")
 	}
-
-	return cfg, nil
+	if dbURL == "" {
+		host := os.Getenv("DB_HOST")
+		if host == "" {
+			host = "db"
+		}
+		port := os.Getenv("DB_PORT")
+		if port == "" {
+			port = "5432"
+		}
+		user := os.Getenv("DB_USER")
+		if user == "" {
+			user = os.Getenv("DB_USERNAME")
+		}
+		if user == "" {
+			user = os.Getenv("POSTGRES_USER")
+		}
+		if user == "" {
+			user = "app"
+		}
+		password := os.Getenv("DB_PASSWORD")
+		if password == "" {
+			password = os.Getenv("POSTGRES_PASSWORD")
+		}
+		if password == "" {
+			password = "app"
+		}
+		dbName := os.Getenv("DB_NAME")
+		if dbName == "" {
+			dbName = os.Getenv("DB_DATABASE")
+		}
+		if dbName == "" {
+			dbName = os.Getenv("POSTGRES_DB")
+		}
+		if dbName == "" {
+			dbName = "app"
+		}
+		dbURL = fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", user, password, host, port, dbName)
+	}
+	return &Config{
+		DatabaseURL: dbURL,
+	}, nil
 }
