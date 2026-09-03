@@ -1,15 +1,13 @@
 package internal
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
-
+	"context"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jmoiron/sqlx"
@@ -19,6 +17,7 @@ import (
 	"internal/database"
 	"internal/model"
 	"internal/schemas"
+	"time"
 )
 
 // MIGRATION_NOTE: The original Python code uses FastAPI with async database operations.
@@ -85,7 +84,7 @@ func listBooks(w http.ResponseWriter, r *http.Request) {
 // getBook retrieves a single book by its ID.
 func getBook(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	vars := chi.RouteContext(r.Context()).Vars()
+	vars := chi.RouteVars(r)
 	bookID := vars["book_id"]
 	db := database.GetSyncDB()
 
@@ -139,7 +138,7 @@ func createBook(w http.ResponseWriter, r *http.Request) {
 // updateBook updates an existing book.
 func updateBook(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	vars := chi.RouteContext(r.Context()).Vars()
+	vars := chi.RouteVars(r)
 	bookID := vars["book_id"]
 	var bookUpdate schemas.BookUpdate
 	if err := json.NewDecoder(r.Body).Decode(&bookUpdate); err != nil {
@@ -172,7 +171,7 @@ func updateBook(w http.ResponseWriter, r *http.Request) {
 // deleteBook deletes a book by its ID.
 func deleteBook(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	vars := chi.RouteContext(r.Context()).Vars()
+	vars := chi.RouteVars(r)
 	bookID := vars["book_id"]
 	db := database.GetSyncDB()
 
