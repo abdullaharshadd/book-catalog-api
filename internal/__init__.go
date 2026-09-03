@@ -1,10 +1,22 @@
 package internal
 
-// PackageVersion represents the version of the package.
-//nconst PackageVersion = "1.0.0"
+// BookCatalogAPI represents the metadata of the Book Catalog API.
+type BookCatalogAPI struct {
+	Version string
+	Author  string
+	Email   string
+}
 
-// PackageAuthor represents the author of the package.
-//nconst PackageAuthor = "Abdullah Arshad"
+// NewBookCatalogAPI returns a new instance of BookCatalogAPI.
+func NewBookCatalogAPI() *BookCatalogAPI {
+	return &BookCatalogAPI{
+		Version: "1.0.0",
+		Author:  "Abdullah Arshad",
+		Email:   "abdullah.arshad.314@gmail.com",
+	}
+}
 
-// PackageEmail represents the email of the author of the package.
-//nconst PackageEmail = "abdullah.arshad.314@gmail.com"
+// GetBookCatalogAPI returns the BookCatalogAPI metadata.
+func GetBookCatalogAPI() *BookCatalogAPI {
+	return NewBookCatalogAPI()
+}
