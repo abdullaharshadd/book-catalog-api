@@ -4,75 +4,72 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
-	"strings"
-
 	"github.com/jmoiron/sqlx"
-	"github.com/lib/pq"
-	"github.com/spf13/viper"
+	_ "github.com/lib/pq"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/viper"
+	"internal/model"
 )
 
-var (
-	databaseURL = viper.GetString("DATABASE_URL")
-	asyncDatabaseURL = viper.GetString("ASYNC_DATABASE_URL")
-)
-
-// Database provides a way to interact with the database.
-// It encapsulates the database connection and provides methods to create sessions.
+// Database represents the database connection and session factories.
 type Database struct {
 	syncDB  *sqlx.DB
 	asyncDB *sqlx.DB
 }
 
-// NewDatabase initializes a new Database instance.
-func NewDatabase() (*Database, error) {
-	syncDB, err := sqlx.Open("postgres", databaseURL)
+// NewDatabase initializes and returns a new Database instance.
+func NewDatabase(ctx context.Context) (*Database, error) {
+	dbConfig := viper.GetString("DATABASE_URL")
+	asyncDBConfig := viper.GetString("ASYNC_DATABASE_URL")
+
+	syncDB, err := sqlx.Open("postgres", dbConfig)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open sync database: %w", err)
 	}
-	asyncDB, err := sqlx.Open("postgres", asyncDatabaseURL)
+	defer syncDB.Close()
+
+	asyncDB, err := sqlx.Open("postgres", asyncDBConfig)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open async database: %w", err)
 	}
-	return &Database{syncDB: syncDB, asyncDB: asyncDB}, nil
+	defer asyncDB.Close()
+
+	return &Database{
+		syncDB:  syncDB,
+		asyncDB: asyncDB,
+	}, nil
 }
 
-// InitDB initializes the database schema.
-func (db *Database) InitDB() error {
-	// Replace this with actual DDL SQL statements or migration files
-	ddl := `CREATE TABLE IF NOT EXISTS books (
+// InitDB initializes the database by creating all tables.
+func (db *Database) InitDB(ctx context.Context) error {
+	query := `CREATE TABLE IF NOT EXISTS books (
 		id SERIAL PRIMARY KEY,
-		title VARCHAR(255) NOT NULL,
-		author VARCHAR(255) NOT NULL
-	);`
-	_, err := db.syncDB.Exec(ddl)
+		title TEXT NOT NULL,
+		author TEXT NOT NULL,
+		published_year INT NOT NULL,
+		summary TEXT
+	)`
+	_, err := db.syncDB.ExecContext(ctx, query)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create table: %w", err)
 	}
 	return nil
 }
 
-// GetDB provides a new async database session.
+// GetDB returns a new async database session for each request.
 func (db *Database) GetDB(ctx context.Context) (*sqlx.Tx, error) {
-	tx := db.asyncDB.MustBeginTxx(ctx, &sql.TxOptions{})
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
-			panic(r)
-		}
-	}()
+	tx, err := db.asyncDB.BeginTxx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
 	return tx, nil
 }
 
-// GetSyncDB provides a new sync database session.
+// GetSyncDB returns a new sync database session for testing and synchronous operations.
 func (db *Database) GetSyncDB() (*sqlx.Tx, error) {
-	tx := db.syncDB.MustBegin()
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
-			panic(r)
-		}
-	}()
+	tx, err := db.syncDB.BeginTxx(context.Background(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin sync transaction: %w", err)
+	}
 	return tx, nil
 }
