@@ -3,11 +3,8 @@ package tests
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"testing"
-
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/stretchr/testify/assert"
@@ -35,7 +32,9 @@ func TestSuite(t *testing.T) {
 
 func testAPIEndpoints(t *testing.T, api *internal.BookCatalogAPI, db *sqlx.DB) {
 	// Setup
-	client := httptest.NewServer(api.Router())
+	client := &httptest.Server{
+		Config: &http.Server{Handler: api.Router()},
+	}
 	defer client.Close()
 
 	// Test root endpoint
@@ -172,120 +171,8 @@ func testGetBooksEmpty(t *testing.T, client *httptest.Server, db *sqlx.DB) {
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var books []model.Book
+	var books []schemas.BookResponse
 	err = json.NewDecoder(resp.Body).Decode(&books)
 	require.NoError(t, err)
-	assert.Empty(t, books)
-}
-
-func readerOfJSON(t *testing.T, v interface{}) *strings.Reader {
-	data, err := json.Marshal(v)
-	require.NoError(t, err)
-	return strings.NewReader(string(data))
-}
-
-func getSyncDB(t *testing.T, db *Database) *sqlx.DB {
-	// Assuming a method to get the syncDB from Database
-	return db.syncDB
-}
-
-func dropAllTables(t *testing.T, db *sqlx.DB) {
-	// Assuming a method to drop all tables is implemented
-	// This is a placeholder for the actual implementation
-	log.Info().Msg("Dropping all tables...")
-}
-
-func testAPIEndpoints(t *testing.T, api *internal.BookCatalogAPI, db *sqlx.DB) {
-	// Placeholder for actual implementation
-	log.Info().Msg("Testing API endpoints...")
-}
-
-func testReadRoot(t *testing.T, client *httptest.Server) {
-	// Placeholder for actual implementation
-	log.Info().Msg("Testing root endpoint...")
-}
-
-func testHealthCheck(t *testing.T, client *httptest.Server) {
-	// Placeholder for actual implementation
-	log.Info().Msg("Testing health check endpoint...")
-}
-
-func testCreateBook(t *testing.T, client *httptest.Server, db *sqlx.DB) {
-	// Placeholder for actual implementation
-	log.Info().Msg("Testing create book endpoint...")
-}
-
-func testCreateBookWithoutSummary(t *testing.T, client *httptest.Server, db *sqlx.DB) {
-	// Placeholder for actual implementation
-	log.Info().Msg("Testing create book without summary endpoint...")
-}
-
-func testCreateBookValidationError(t *testing.T, client *httptest.Server, db *sqlx.DB) {
-	// Placeholder for actual implementation
-	log.Info().Msg("Testing create book validation error endpoint...")
-}
-
-func testCreateDuplicateBook(t *testing.T, client *httptest.Server, db *sqlx.DB) {
-	// Placeholder for actual implementation
-	log.Info().Msg("Testing create duplicate book endpoint...")
-}
-
-func testCreateBooksSameTitleDifferentAuthors(t *testing.T, client *httptest.Server, db *sqlx.DB) {
-	// Placeholder for actual implementation
-	log.Info().Msg("Testing create books with same title but different authors endpoint...")
-}
-
-func testFullCRUDWorkflow(t *testing.T, client *httptest.Server, db *sqlx.DB) {
-	// Placeholder for actual implementation
-	log.Info().Msg("Testing full CRUD workflow endpoint...")
-}
-
-func testGetBooksEmpty(t *testing.T, client *httptest.Server, db *sqlx.DB) {
-	// Placeholder for actual implementation
-	log.Info().Msg("Testing get books empty endpoint...")
-}
-
-func testGetBooksWithData(t *testing.T, client *httptest.Server, db *sqlx.DB) {
-	// Placeholder for actual implementation
-	log.Info().Msg("Testing get books with data endpoint...")
-}
-
-func testGetBooksWithPagination(t *testing.T, client *httptest.Server, db *sqlx.DB) {
-	// Placeholder for actual implementation
-	log.Info().Msg("Testing get books with pagination endpoint...")
-}
-
-func testGetBookByID(t *testing.T, client *httptest.Server, db *sqlx.DB) {
-	// Placeholder for actual implementation
-	log.Info().Msg("Testing get book by ID endpoint...")
-}
-
-func testGetBookNotFound(t *testing.T, client *httptest.Server, db *sqlx.DB) {
-	// Placeholder for actual implementation
-	log.Info().Msg("Testing get book not found endpoint...")
-}
-
-func testUpdateBook(t *testing.T, client *httptest.Server, db *sqlx.DB) {
-	// Placeholder for actual implementation
-	log.Info().Msg("Testing update book endpoint...")
-}
-
-func testUpdateBookNotFound(t *testing.T, client *httptest.Server, db *sqlx.DB) {
-	// Placeholder for actual implementation
-	log.Info().Msg("Testing update book not found endpoint...")
-}
-
-func testUpdateBookValidationError(t *testing.T, client *httptest.Server, db *sqlx.DB) {
-	// Placeholder for actual implementation
-	log.Info().Msg("Testing update book validation error endpoint...")
-}
-
-func testDeleteBook(t *testing.T, client *httptest.Server, db *sqlx.DB) {
-	// Placeholder for actual implementation
-	log.Info().Msg("Testing delete book endpoint...")
-}
-
-func testDeleteBookNotFound(t *testing.T, client *httptest.Server, db *sqlx.DB) {
-	// Placeholder for actual implementation
-	log.Info().Msg("Testing delete book not found endpoint...")
+	assert.Len(t, books, 0)
 }
