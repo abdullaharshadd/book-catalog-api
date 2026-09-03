@@ -6,209 +6,241 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
-	"github.com/stretchr/testify/require"
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/jmoiron/sqlx"
+	"github.com/stretchr/testify/assert"
 )
 
 type MockDB struct {
-	mock.Mock
+	*sqlx.DB
 }
 
-func (m *MockDB) Exec(query string, args ...interface{}) (sql.Result, error) {
-	args := m.Called(query, args)
-	return args.Get(0).(sql.Result), args.Error(1)
+func (m *MockDB) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+	return m.DB.ExecContext(ctx, query, args...)
 }
 
-func (m *MockDB) MustBeginTxx(ctx context.Context, opts *sql.TxOptions) *sqlx.Tx {
-	args := m.Called(ctx, opts)
-	return args.Get(0).(*sqlx.Tx)
+func (m *MockDB) BeginTxx(ctx context.Context, opts *sql.TxOptions) (*sqlx.Tx, error) {
+	return m.DB.BeginTxx(ctx, opts)
 }
 
-func (m *MockDB) MustBegin() *sqlx.Tx {
-	args := m.Called()
-	return args.Get(0).(*sqlx.Tx)
+func TestNewDatabase(t *testing.T) {
+	tests := []struct {
+		name    string
+		dbConfig string
+		asyncDBConfig string
+		mockFunc func(mock sqlmock.Sqlmock)
+		wantErr bool
+	}{
+		{
+			name: "Success",
+			dbConfig: "postgres://user:password@localhost:5432/dbname?sslmode=disable",
+			asyncDBConfig: "postgres://user:password@localhost:5432/dbname?sslmode=disable",
+			mockFunc: func(mock sqlmock.Sqlmock) {},
+			wantErr: false,
+		},
+		{
+			name: "SyncDBOpenError",
+			dbConfig: "invalid_sync_db_url",
+			asyncDBConfig: "postgres://user:password@localhost:5432/dbname?sslmode=disable",
+			mockFunc: func(mock sqlmock.Sqlmock) {},
+			wantErr: true,
+		},
+		{
+			name: "AsyncDBOpenError",
+			dbConfig: "postgres://user:password@localhost:5432/dbname?sslmode=disable",
+			asyncDBConfig: "invalid_async_db_url",
+			mockFunc: func(mock sqlmock.Sqlmock) {},
+			wantErr: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			viper.Set("DATABASE_URL", test.dbConfig)
+			viper.Set("ASYNC_DATABASE_URL", test.asyncDBConfig)
+
+			syncDB, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+			}
+			defer syncDB.Close()
+
+			mockDB := &sqlx.DB{DB: syncDB.DB}
+			syncDB.(*sqlmock.Sqlmock).EXPECT().PingContext(context.Background()).Return(nil)
+			test.mockFunc(syncDB.(*sqlmock.Sqlmock))
+
+			asyncDB, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+			}
+			defer asyncDB.Close()
+
+			mockAsyncDB := &sqlx.DB{DB: asyncDB.DB}
+			asyncDB.(*sqlmock.Sqlmock).EXPECT().PingContext(context.Background()).Return(nil)
+			test.mockFunc(asyncDB.(*sqlmock.Sqlmock))
+
+			db, err := NewDatabase(context.Background())
+			if test.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, db)
+			}
+		})
+	}
 }
 
 func TestInitDB(t *testing.T) {
-	type fields struct {
-		syncDB  *MockDB
-		asyncDB *MockDB
-	}
-	type want struct {
-		err  error
-		mock func(*MockDB)
-	}
 	tests := []struct {
-		name   string
-		fields fields
-		want   want
+		name        string
+		mockFunc    func(mock sqlmock.Sqlmock)
+		wantErr     bool
 	}{
 		{
-			name: "success",
-			fields: fields{
-				syncDB: &MockDB{},
+			name: "Success",
+			mockFunc: func(mock sqlmock.Sqlmock) {
+				query := `CREATE TABLE IF NOT EXISTS books .+`
+				mock.ExpectExec(query).WillReturnResult(sqlmock.NewResult(1, 1))
 			},
-			want: want{
-				err: nil,
-				mock: func(m *MockDB) {
-					m.On("Exec", `CREATE TABLE IF NOT EXISTS books (
-						id SERIAL PRIMARY KEY,
-						title VARCHAR(255) NOT NULL,
-						author VARCHAR(255) NOT NULL
-					);`, nil).Return(sql.Result{}, nil)
-				},
-			},
+			wantErr: false,
 		},
 		{
-			name: "error",
-			fields: fields{
-				syncDB: &MockDB{},
+			name: "TableCreationError",
+			mockFunc: func(mock sqlmock.Sqlmock) {
+				query := `CREATE TABLE IF NOT EXISTS books .+`
+				mock.ExpectExec(query).WillReturnError(sql.ErrTxDone)
 			},
-			want: want{
-				err: assert.AnError,
-				mock: func(m *MockDB) {
-					m.On("Exec", `CREATE TABLE IF NOT EXISTS books (
-						id SERIAL PRIMARY KEY,
-						title VARCHAR(255) NOT NULL,
-						author VARCHAR(255) NOT NULL
-					);`, nil).Return(sql.Result{}, assert.AnError)
-				},
-			},
+			wantErr: true,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.want.mock != nil {
-				tt.want.mock(tt.fields.syncDB)
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
 			}
-			db := &Database{
-				syncDB:  tt.fields.syncDB,
-				asyncDB: tt.fields.asyncDB,
+			defer db.Close()
+
+			mockDB := &MockDB{DB: db.DB}
+			test.mockFunc(db.(*sqlmock.Sqlmock))
+
+			err = mockDB.InitDB(context.Background())
+			if test.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
 			}
-			err := db.InitDB()
-			assert.Equal(t, tt.want.err, err)
-			tt.fields.syncDB.AssertExpectations(t)
 		})
 	}
 }
 
 func TestGetDB(t *testing.T) {
-	type fields struct {
-		asyncDB *MockDB
-	}
-	type want struct {
-		tx  *sqlx.Tx
-		err error
-		mock func(*MockDB)
-	}
 	tests := []struct {
-		name   string
-		fields fields
-		want   want
+		name        string
+		mockFunc    func(mock sqlmock.Sqlmock)
+		wantErr     bool
 	}{
 		{
-			name: "success",
-			fields: fields{
-				asyncDB: &MockDB{},
+			name: "Success",
+			mockFunc: func(mock sqlmock.Sqlmock) {
+				mock.ExpectBegin()
+				mock.ExpectCommit()
 			},
-			want: want{
-				tx:  &sqlx.Tx{},
-				err: nil,
-				mock: func(m *MockDB) {
-					m.On("MustBeginTxx", mock.Anything, mock.Anything).Return(&sqlx.Tx{}, nil)
-				},
-			},
+			wantErr: false,
 		},
 		{
-			name: "error",
-			fields: fields{
-				asyncDB: &MockDB{},
+			name: "BeginTxxError",
+			mockFunc: func(mock sqlmock.Sqlmock) {
+				mock.ExpectBegin().WillReturnError(sql.ErrTxDone)
 			},
-			want: want{
-				tx:  nil,
-				err: assert.AnError,
-				mock: func(m *MockDB) {
-					m.On("MustBeginTxx", mock.Anything, mock.Anything).Return(&sqlx.Tx{}, assert.AnError)
-				},
+			wantErr: true,
+		},
+		{
+			name: "CommitError",
+			mockFunc: func(mock sqlmock.Sqlmock) {
+				mock.ExpectBegin()
+				mock.ExpectCommit().WillReturnError(sql.ErrTxDone)
 			},
+			wantErr: true,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.want.mock != nil {
-				tt.want.mock(tt.fields.asyncDB)
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
 			}
-			db := &Database{
-				syncDB:  &sqlx.DB{},
-				asyncDB: tt.fields.asyncDB,
+			defer db.Close()
+
+			mockDB := &MockDB{DB: db.DB}
+			test.mockFunc(db.(*sqlmock.Sqlmock))
+
+			tx, err := mockDB.GetDB(context.Background())
+			if test.wantErr {
+				assert.Error(t, err)
+				assert.Nil(t, tx)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, tx)
+				tx.Rollback()
 			}
-			ctx := context.Background()
-			tx, err := db.GetDB(ctx)
-			assert.Equal(t, tt.want.err, err)
-			assert.Equal(t, tt.want.tx, tx)
-			tt.fields.asyncDB.AssertExpectations(t)
 		})
 	}
 }
 
 func TestGetSyncDB(t *testing.T) {
-	type fields struct {
-		syncDB *MockDB
-	}
-	type want struct {
-		tx  *sqlx.Tx
-		err error
-		mock func(*MockDB)
-	}
 	tests := []struct {
-		name   string
-		fields fields
-		want   want
+		name        string
+		mockFunc    func(mock sqlmock.Sqlmock)
+		wantErr     bool
 	}{
 		{
-			name: "success",
-			fields: fields{
-				syncDB: &MockDB{},
+			name: "Success",
+			mockFunc: func(mock sqlmock.Sqlmock) {
+				mock.ExpectBegin()
+				mock.ExpectCommit()
 			},
-			want: want{
-				tx:  &sqlx.Tx{},
-				err: nil,
-				mock: func(m *MockDB) {
-					m.On("MustBegin").Return(&sqlx.Tx{})
-				},
-			},
+			wantErr: false,
 		},
 		{
-			name: "error",
-			fields: fields{
-				syncDB: &MockDB{},
+			name: "BeginTxxError",
+			mockFunc: func(mock sqlmock.Sqlmock) {
+				mock.ExpectBegin().WillReturnError(sql.ErrTxDone)
 			},
-			want: want{
-				tx:  nil,
-				err: assert.AnError,
-				mock: func(m *MockDB) {
-					m.On("MustBegin").Return(&sqlx.Tx{}).Run(func(args mock.Arguments) {
-						panic(assert.AnError)
-					})
-				},
+			wantErr: true,
+		},
+		{
+			name: "CommitError",
+			mockFunc: func(mock sqlmock.Sqlmock) {
+				mock.ExpectBegin()
+				mock.ExpectCommit().WillReturnError(sql.ErrTxDone)
 			},
+			wantErr: true,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.want.mock != nil {
-				tt.want.mock(tt.fields.syncDB)
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
 			}
-			db := &Database{
-				syncDB:  tt.fields.syncDB,
-				asyncDB: &sqlx.DB{},
+			defer db.Close()
+
+			mockDB := &MockDB{DB: db.DB}
+			test.mockFunc(db.(*sqlmock.Sqlmock))
+
+			tx, err := mockDB.GetSyncDB()
+			if test.wantErr {
+				assert.Error(t, err)
+				assert.Nil(t, tx)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, tx)
+				tx.Rollback()
 			}
-			tx, err := db.GetSyncDB()
-			assert.Equal(t, tt.want.err, err)
-			assert.Equal(t, tt.want.tx, tx)
-			tt.fields.syncDB.AssertExpectations(t)
 		})
 	}
 }
