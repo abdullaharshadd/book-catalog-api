@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"context"
 	"github.com/go-chi/chi/v5"
@@ -14,6 +15,8 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
 	"internal/database"
+	"internal/model"
+	"internal/schemas"
 	"time"
 )
 
@@ -57,16 +60,17 @@ func listBooks(w http.ResponseWriter, r *http.Request) {
 	limit = min(limit, 1000)
 	db := database.GetSyncDB()
 
-	query := fmt.Sprintf("SELECT * FROM "book" OFFSET $1 LIMIT $2")
+	query := fmt.Sprintf("SELECT * FROM book OFFSET $1 LIMIT $2")
 	rows, err := db.QueryContext(ctx, query, skip, limit)
 	if err != nil {
 		log.Error().Err(err).Msg("Error retrieving books")
 		http.Error(w, "Internal server error while retrieving books", http.StatusInternalServerError)
 		return
 	}
-	posts := []BookResponse{}
+	defer rows.Close()
+	posts := []model.BookResponse{}
 	for rows.Next() {
-		var book BookResponse
+		var book model.BookResponse
 		if err := rows.Scan(&book.ID, &book.Title, &book.Author, &book.PublishedYear, &book.Summary); err != nil {
 			log.Error().Err(err).Msg("Error scanning book")
 			http.Error(w, "Internal server error while retrieving books", http.StatusInternalServerError)
@@ -80,12 +84,12 @@ func listBooks(w http.ResponseWriter, r *http.Request) {
 // getBook retrieves a single book by its ID.
 func getBook(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	vars := chi.RouteContext(r.Context()).Vars
-	bookID := vars["book_id"]
+	vars := chi.URLParam(r, "book_id")
+	bookID := vars
 	db := database.GetSyncDB()
 
-	query := "SELECT * FROM "book" WHERE id=$1"
-	var book BookResponse
+	query := "SELECT * FROM book WHERE id=$1"
+	var book model.BookResponse
 	if err := db.GetContext(ctx, &book, query, bookID); err != nil {
 		if err == sql.ErrNoRows {
 			log.Warn().Msgf("Book with ID %s not found", bookID)
@@ -102,7 +106,7 @@ func getBook(w http.ResponseWriter, r *http.Request) {
 // createBook creates a new book.
 func createBook(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	var bookCreate BookCreate
+	var bookCreate schemas.BookCreate
 	if err := json.NewDecoder(r.Body).Decode(&bookCreate); err != nil {
 		log.Error().Err(err).Msg("Error decoding request body")
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -110,7 +114,7 @@ func createBook(w http.ResponseWriter, r *http.Request) {
 	}
 	db := database.GetSyncDB()
 
-	query := "INSERT INTO "book" (title, author, published_year, summary) VALUES ($1, $2, $3, $4) RETURNING id"
+	query := "INSERT INTO book (title, author, published_year, summary) VALUES ($1, $2, $3, $4) RETURNING id"
 	var newID int64
 	if err := db.QueryRowContext(ctx, query, bookCreate.Title, bookCreate.Author, bookCreate.PublishedYear, bookCreate.Summary).Scan(&newID); err != nil {
 		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code.Name() == "unique_violation" {
@@ -122,16 +126,16 @@ func createBook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal server error while creating book", http.StatusInternalServerError)
 		return
 	}
-	newBook := BookResponse{ID: newID, Title: bookCreate.Title, Author: bookCreate.Author, PublishedYear: bookCreate.PublishedYear, Summary: bookCreate.Summary}
+	newBook := model.BookResponse{ID: newID, Title: bookCreate.Title, Author: bookCreate.Author, PublishedYear: bookCreate.PublishedYear, Summary: bookCreate.Summary}
 	json.NewEncoder(w).Encode(newBook)
 }
 
 // updateBook updates an existing book.
 func updateBook(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	vars := chi.RouteContext(r.Context()).Vars
-	bookID := vars["book_id"]
-	var bookUpdate BookUpdate
+	vars := chi.URLParam(r, "book_id")
+	bookID := vars
+	var bookUpdate schemas.BookUpdate
 	if err := json.NewDecoder(r.Body).Decode(&bookUpdate); err != nil {
 		log.Error().Err(err).Msg("Error decoding request body")
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -139,7 +143,7 @@ func updateBook(w http.ResponseWriter, r *http.Request) {
 	}
 	db := database.GetSyncDB()
 
-	query := "UPDATE "book" SET title=$1, author=$2, published_year=$3, summary=$4 WHERE id=$5 RETURNING id"
+	query := "UPDATE book SET title=$1, author=$2, published_year=$3, summary=$4 WHERE id=$5 RETURNING id"
 	var updatedID int64
 	if err := db.QueryRowContext(ctx, query, bookUpdate.Title, bookUpdate.Author, bookUpdate.PublishedYear, bookUpdate.Summary, bookID).Scan(&updatedID); err != nil {
 		if err == sql.ErrNoRows {
@@ -156,17 +160,17 @@ func updateBook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal server error while updating book", http.StatusInternalServerError)
 		return
 	}
-	json.NewEncoder(w).Encode(BookResponse{ID: updatedID, Title: bookUpdate.Title, Author: bookUpdate.Author, PublishedYear: bookUpdate.PublishedYear, Summary: bookUpdate.Summary})
+	json.NewEncoder(w).Encode(model.BookResponse{ID: updatedID, Title: bookUpdate.Title, Author: bookUpdate.Author, PublishedYear: bookUpdate.PublishedYear, Summary: bookUpdate.Summary})
 }
 
 // deleteBook deletes a book by its ID.
 func deleteBook(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	vars := chi.RouteContext(r.Context()).Vars
-	bookID := vars["book_id"]
+	vars := chi.URLParam(r, "book_id")
+	bookID := vars
 	db := database.GetSyncDB()
 
-	query := "DELETE FROM "book" WHERE id=$1 RETURNING id"
+	query := "DELETE FROM book WHERE id=$1 RETURNING id"
 	var deletedID int64
 	if err := db.QueryRowContext(ctx, query, bookID).Scan(&deletedID); err != nil {
 		if err == sql.ErrNoRows {
