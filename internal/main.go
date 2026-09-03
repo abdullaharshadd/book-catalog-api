@@ -1,13 +1,13 @@
 package internal
 
 import (
-	"database/sql"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
-	"context"
+	"database/sql"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jmoiron/sqlx"
@@ -16,12 +16,7 @@ import (
 	"github.com/spf13/viper"
 	"internal/database"
 	"internal/model"
-	"internal/schemas"
-	"time"
 )
-
-// MIGRATION_NOTE: The original Python code uses FastAPI with async database operations.
-// The Go version uses synchronous database operations and the net/http package.
 
 // buildRouter constructs the main HTTP router for the book catalog service.
 func buildRouter() http.Handler {
@@ -68,6 +63,7 @@ func listBooks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
+
 	posts := []model.BookResponse{}
 	for rows.Next() {
 		var book model.BookResponse
@@ -106,15 +102,10 @@ func getBook(w http.ResponseWriter, r *http.Request) {
 // createBook creates a new book.
 func createBook(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	var bookCreate schemas.BookCreate
+	var bookCreate model.BookCreate
 	if err := json.NewDecoder(r.Body).Decode(&bookCreate); err != nil {
 		log.Error().Err(err).Msg("Error decoding request body")
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-	if err := bookCreate.Validate(); err != nil {
-		log.Error().Err(err).Msg("Validation error")
-		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	db := database.GetSyncDB()
@@ -140,7 +131,7 @@ func updateBook(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	vars := chi.RouteVars(r)
 	bookID := vars["book_id"]
-	var bookUpdate schemas.BookUpdate
+	var bookUpdate model.BookUpdate
 	if err := json.NewDecoder(r.Body).Decode(&bookUpdate); err != nil {
 		log.Error().Err(err).Msg("Error decoding request body")
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
