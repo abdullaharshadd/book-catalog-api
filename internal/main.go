@@ -1,13 +1,15 @@
 package internal
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
-	"context"
+	"time"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jmoiron/sqlx"
@@ -17,7 +19,6 @@ import (
 	"internal/database"
 	"internal/model"
 	"internal/schemas"
-	"time"
 )
 
 // MIGRATION_NOTE: The original Python code uses FastAPI with async database operations.
@@ -84,8 +85,8 @@ func listBooks(w http.ResponseWriter, r *http.Request) {
 // getBook retrieves a single book by its ID.
 func getBook(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	vars := chi.URLParam(r, "book_id")
-	bookID := vars
+	vars := chi.RouteContext(r.Context()).Vars()
+	bookID := vars["book_id"]
 	db := database.GetSyncDB()
 
 	query := "SELECT * FROM book WHERE id=$1"
@@ -112,6 +113,11 @@ func createBook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+	if err := bookCreate.Validate(); err != nil {
+		log.Error().Err(err).Msg("Validation error")
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	db := database.GetSyncDB()
 
 	query := "INSERT INTO book (title, author, published_year, summary) VALUES ($1, $2, $3, $4) RETURNING id"
@@ -133,8 +139,8 @@ func createBook(w http.ResponseWriter, r *http.Request) {
 // updateBook updates an existing book.
 func updateBook(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	vars := chi.URLParam(r, "book_id")
-	bookID := vars
+	vars := chi.RouteContext(r.Context()).Vars()
+	bookID := vars["book_id"]
 	var bookUpdate schemas.BookUpdate
 	if err := json.NewDecoder(r.Body).Decode(&bookUpdate); err != nil {
 		log.Error().Err(err).Msg("Error decoding request body")
@@ -166,8 +172,8 @@ func updateBook(w http.ResponseWriter, r *http.Request) {
 // deleteBook deletes a book by its ID.
 func deleteBook(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	vars := chi.URLParam(r, "book_id")
-	bookID := vars
+	vars := chi.RouteContext(r.Context()).Vars()
+	bookID := vars["book_id"]
 	db := database.GetSyncDB()
 
 	query := "DELETE FROM book WHERE id=$1 RETURNING id"
