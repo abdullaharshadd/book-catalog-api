@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"github.com/migrated-app/cmd/server/router"
+	internal "migrated-app/internal"
 )
 
 func main() {
@@ -18,7 +18,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:    ":8080",
-		Handler: router.BuildRouter(),
+		Handler: internal.BuildRouter(),
 	}
 
 	go func() {
