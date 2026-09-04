@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"cmd/server/router" // Assuming the router package exists and contains the buildRouter function
 )
 
 func main() {
@@ -17,7 +18,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:    ":8080",
-		Handler: buildRouter(),
+		Handler: router.BuildRouter(), // Corrected function call
 	}
 
 	go func() {
