@@ -2,13 +2,11 @@ package internal
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
-	"internal/model"
 )
 
 // Database represents the database connection and session factories.
@@ -26,13 +24,12 @@ func NewDatabase(ctx context.Context) (*Database, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sync database: %w", err)
 	}
-	defer syncDB.Close()
 
 	asyncDB, err := sqlx.Open("postgres", asyncDBConfig)
 	if err != nil {
+		syncDB.Close()
 		return nil, fmt.Errorf("failed to open async database: %w", err)
 	}
-	defer asyncDB.Close()
 
 	return &Database{
 		syncDB:  syncDB,
@@ -73,3 +70,5 @@ func (db *Database) GetSyncDB() (*sqlx.Tx, error) {
 	}
 	return tx, nil
 }
+
+var _ = log.Logger
