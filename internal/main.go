@@ -14,7 +14,6 @@ import (
 	"github.com/lib/pq"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
-	"migrated-app/internal/model"
 )
 
 // BuildRouter constructs the main HTTP router for the book catalog service.
@@ -51,6 +50,31 @@ func getSyncDB() *sqlx.DB {
 	return db
 }
 
+// BookResponse represents a book response.
+type BookResponse struct {
+	ID            int64          `db:"id" json:"id"`
+	Title         string         `db:"title" json:"title"`
+	Author        string         `db:"author" json:"author"`
+	PublishedYear int            `db:"published_year" json:"published_year"`
+	Summary       sql.NullString `db:"summary" json:"summary"`
+}
+
+// BookCreate represents a book creation request.
+type BookCreate struct {
+	Title         string         `json:"title"`
+	Author        string         `json:"author"`
+	PublishedYear int            `json:"published_year"`
+	Summary       sql.NullString `json:"summary"`
+}
+
+// BookUpdate represents a book update request.
+type BookUpdate struct {
+	Title         string         `json:"title"`
+	Author        string         `json:"author"`
+	PublishedYear int            `json:"published_year"`
+	Summary       sql.NullString `json:"summary"`
+}
+
 // root is the root endpoint with API information.
 func root(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -82,9 +106,9 @@ func listBooks(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	posts := []model.BookResponse{}
+	posts := []BookResponse{}
 	for rows.Next() {
-		var book model.BookResponse
+		var book BookResponse
 		if err := rows.Scan(&book.ID, &book.Title, &book.Author, &book.PublishedYear, &book.Summary); err != nil {
 			log.Error().Err(err).Msg("Error scanning book")
 			http.Error(w, "Internal server error while retrieving books", http.StatusInternalServerError)
@@ -104,7 +128,7 @@ func getBook(w http.ResponseWriter, r *http.Request) {
 	defer db.Close()
 
 	query := "SELECT * FROM book WHERE id=$1"
-	var book model.BookResponse
+	var book BookResponse
 	if err := db.GetContext(ctx, &book, query, bookID); err != nil {
 		if err == sql.ErrNoRows {
 			log.Warn().Msgf("Book with ID %s not found", bookID)
@@ -122,7 +146,7 @@ func getBook(w http.ResponseWriter, r *http.Request) {
 // createBook creates a new book.
 func createBook(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	var bookCreate model.BookCreate
+	var bookCreate BookCreate
 	if err := json.NewDecoder(r.Body).Decode(&bookCreate); err != nil {
 		log.Error().Err(err).Msg("Error decoding request body")
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -143,7 +167,7 @@ func createBook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal server error while creating book", http.StatusInternalServerError)
 		return
 	}
-	newBook := model.BookResponse{ID: newID, Title: bookCreate.Title, Author: bookCreate.Author, PublishedYear: bookCreate.PublishedYear, Summary: bookCreate.Summary}
+	newBook := BookResponse{ID: newID, Title: bookCreate.Title, Author: bookCreate.Author, PublishedYear: bookCreate.PublishedYear, Summary: bookCreate.Summary}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(newBook)
@@ -153,7 +177,7 @@ func createBook(w http.ResponseWriter, r *http.Request) {
 func updateBook(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	bookID := chi.URLParam(r, "book_id")
-	var bookUpdate model.BookUpdate
+	var bookUpdate BookUpdate
 	if err := json.NewDecoder(r.Body).Decode(&bookUpdate); err != nil {
 		log.Error().Err(err).Msg("Error decoding request body")
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -180,7 +204,7 @@ func updateBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(model.BookResponse{ID: updatedID, Title: bookUpdate.Title, Author: bookUpdate.Author, PublishedYear: bookUpdate.PublishedYear, Summary: bookUpdate.Summary})
+	json.NewEncoder(w).Encode(BookResponse{ID: updatedID, Title: bookUpdate.Title, Author: bookUpdate.Author, PublishedYear: bookUpdate.PublishedYear, Summary: bookUpdate.Summary})
 }
 
 // deleteBook deletes a book by its ID.
