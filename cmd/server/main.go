@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"router" // Corrected import path
+	"cmd/server/router" // Corrected import path
 )
 
 func main() {
