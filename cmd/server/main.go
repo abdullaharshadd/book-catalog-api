@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"cmd/server/router" // Assuming the router package exists and contains the buildRouter function
+	"router" // Corrected import path
 )
 
 func main() {
