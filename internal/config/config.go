@@ -24,7 +24,7 @@ func Load() (*Config, error) {
 	// back "" every time, so the app's own hardcoded main.go fallback DSN
 	// ran instead — wrong credentials, connection refused on every attempt.
 	viper.SetDefault("PORT", "8080")
-	_ = viper.BindEnv("DATABASE_URL")
+_ = viper.BindEnv("PORT")	_ = viper.BindEnv("DATABASE_URL")
 	_ = viper.BindEnv("JWT_SECRET")
 	var cfg Config
 	if err := viper.Unmarshal(&cfg); err != nil {
