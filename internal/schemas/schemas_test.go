@@ -9,11 +9,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	schemas "migrated-app/internal/schemas"
+	"migrated-app/internal/model"
+	"migrated-app/internal/schemas"
 )
 
 // ---------------------------------------------------------------------------
-// Helpers
+// helpers
 // ---------------------------------------------------------------------------
 
 func strPtr(s string) *string { return &s }
@@ -21,492 +22,456 @@ func intPtr(i int) *int       { return &i }
 
 func currentYear() int { return time.Now().Year() }
 
-// ---------------------------------------------------------------------------
-// BookCreate – UnmarshalJSON (required-field enforcement)
-// ---------------------------------------------------------------------------
-
-func TestBookCreate_UnmarshalJSON_RequiredFields(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name      string
-		body      string
-		wantErr   bool
-		errSubstr string
-	}{
-		{
-			name:      "missing title",
-			body:      `{"author":"Tolkien","published_year":1954}`,
-			wantErr:   true,
-			errSubstr: "title",
-		},
-		{
-			name:      "missing author",
-			body:      `{"title":"The Hobbit","published_year":1937}`,
-			wantErr:   true,
-			errSubstr: "author",
-		},
-		{
-			name:      "missing published_year",
-			body:      `{"title":"The Hobbit","author":"Tolkien"}`,
-			wantErr:   true,
-			errSubstr: "published_year",
-		},
-		{
-			name:    "all required fields present",
-			body:    `{"title":"The Hobbit","author":"Tolkien","published_year":1937}`,
-			wantErr: false,
-		},
-		{
-			name:    "all fields present including summary",
-			body:    `{"title":"The Hobbit","author":"Tolkien","published_year":1937,"summary":"A classic"}`,
-			wantErr: false,
-		},
-		{
-			name:      "empty JSON object",
-			body:      `{}`,
-			wantErr:   true,
-			errSubstr: "field required",
-		},
-		{
-			name:      "invalid JSON",
-			body:      `not-json`,
-			wantErr:   true,
-			errSubstr: "",
-		},
-	}
-
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			var bc schemas.BookCreate
-			err := json.Unmarshal([]byte(tc.body), &bc)
-			if tc.wantErr {
-				require.Error(t, err)
-				if tc.errSubstr != "" {
-					assert.Contains(t, err.Error(), tc.errSubstr)
-				}
-			} else {
-				require.NoError(t, err)
-			}
-		})
-	}
+// mustMarshal converts v to a JSON byte slice, failing the test on error.
+func mustMarshal(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	require.NoError(t, err)
+	return b
 }
 
 // ---------------------------------------------------------------------------
-// BookCreate – Validate
+// BookCreate – UnmarshalJSON
 // ---------------------------------------------------------------------------
 
-func TestBookCreate_Validate_Title(t *testing.T) {
-	t.Parallel()
+func TestBookCreate_UnmarshalJSON(t *testing.T) {
+	cy := currentYear()
 
-	year := currentYear()
-
-	tests := []struct {
-		name      string
-		title     string
-		wantErr   bool
-		errSubstr string
-		wantTitle string
-	}{
-		{
-			name:      "empty title",
-			title:     "",
-			wantErr:   true,
-			errSubstr: "Title cannot be empty",
-		},
-		{
-			name:      "whitespace-only title",
-			title:     "   ",
-			wantErr:   true,
-			errSubstr: "Title cannot be empty",
-		},
-		{
-			name:      "title exceeds 255 chars",
-			title:     strings.Repeat("a", 256),
-			wantErr:   true,
-			errSubstr: "ensure this value has at most 255 characters",
-		},
-		{
-			name:      "title exactly 255 chars",
-			title:     strings.Repeat("a", 255),
-			wantErr:   false,
-			wantTitle: strings.Repeat("a", 255),
-		},
-		{
-			name:      "title with surrounding whitespace stripped",
-			title:     "  The Hobbit  ",
-			wantErr:   false,
-			wantTitle: "The Hobbit",
-		},
-		{
-			name:      "normal title",
-			title:     "The Hobbit",
-			wantErr:   false,
-			wantTitle: "The Hobbit",
-		},
+	type input struct {
+		Title         any `json:"title,omitempty"`
+		Author        any `json:"author,omitempty"`
+		PublishedYear any `json:"published_year,omitempty"`
+		Summary       any `json:"summary,omitempty"`
 	}
 
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			bc := schemas.BookCreate{
-				Title:         tc.title,
-				Author:        "Tolkien",
-				PublishedYear: year,
-			}
-			err := bc.Validate()
-			if tc.wantErr {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tc.errSubstr)
-			} else {
-				require.NoError(t, err)
-				assert.Equal(t, tc.wantTitle, bc.Title)
-			}
-		})
-	}
-}
-
-func TestBookCreate_Validate_Author(t *testing.T) {
-	t.Parallel()
-
-	year := currentYear()
-
-	tests := []struct {
-		name       string
-		author     string
-		wantErr    bool
-		errSubstr  string
-		wantAuthor string
-	}{
-		{
-			name:      "empty author",
-			author:    "",
-			wantErr:   true,
-			errSubstr: "Author cannot be empty",
-		},
-		{
-			name:      "whitespace-only author",
-			author:    "   ",
-			wantErr:   true,
-			errSubstr: "Author cannot be empty",
-		},
-		{
-			name:      "author exceeds 255 chars",
-			author:    strings.Repeat("b", 256),
-			wantErr:   true,
-			errSubstr: "ensure this value has at most 255 characters",
-		},
-		{
-			name:       "author exactly 255 chars",
-			author:     strings.Repeat("b", 255),
-			wantErr:    false,
-			wantAuthor: strings.Repeat("b", 255),
-		},
-		{
-			name:       "author with surrounding whitespace",
-			author:     "  Tolkien  ",
-			wantErr:    false,
-			wantAuthor: "Tolkien",
-		},
-		{
-			name:       "normal author",
-			author:     "Tolkien",
-			wantErr:    false,
-			wantAuthor: "Tolkien",
-		},
-	}
-
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			bc := schemas.BookCreate{
-				Title:         "The Hobbit",
-				Author:        tc.author,
-				PublishedYear: year,
-			}
-			err := bc.Validate()
-			if tc.wantErr {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tc.errSubstr)
-			} else {
-				require.NoError(t, err)
-				assert.Equal(t, tc.wantAuthor, bc.Author)
-			}
-		})
-	}
-}
-
-func TestBookCreate_Validate_PublishedYear(t *testing.T) {
-	t.Parallel()
-
-	year := currentYear()
-
-	tests := []struct {
-		name      string
-		year      int
-		wantErr   bool
-		errSubstr string
-	}{
-		{
-			name:      "year below 1000",
-			year:      999,
-			wantErr:   true,
-			errSubstr: "Published year must be after year 1000",
-		},
-		{
-			name:      "year zero",
-			year:      0,
-			wantErr:   true,
-			errSubstr: "Published year must be after year 1000",
-		},
-		{
-			name:      "year exactly 1000",
-			year:      1000,
-			wantErr:   false,
-		},
-		{
-			name:      "future year",
-			year:      year + 1,
-			wantErr:   true,
-			errSubstr: "Published year cannot be in the future",
-		},
-		{
-			name:      "current year",
-			year:      year,
-			wantErr:   false,
-		},
-		{
-			name:      "historical year",
-			year:      1954,
-			wantErr:   false,
-		},
-	}
-
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			bc := schemas.BookCreate{
-				Title:         "Test Book",
-				Author:        "Author",
-				PublishedYear: tc.year,
-			}
-			err := bc.Validate()
-			if tc.wantErr {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tc.errSubstr)
-			} else {
-				require.NoError(t, err)
-			}
-		})
-	}
-}
-
-func TestBookCreate_Validate_PublishedYear_FutureMessageContainsCurrentYear(t *testing.T) {
-	t.Parallel()
-
-	year := currentYear()
-	bc := schemas.BookCreate{
-		Title:         "Future Book",
-		Author:        "Author",
-		PublishedYear: year + 1,
-	}
-	err := bc.Validate()
-	require.Error(t, err)
-	// Message must contain the actual current year value.
-	assert.Contains(t, err.Error(), fmt.Sprintf("%d", year))
-}
-
-func TestBookCreate_Validate_Summary(t *testing.T) {
-	t.Parallel()
-
-	year := currentYear()
+	// Build a raw map so we have precise control over key presence/absence and
+	// null vs. absent distinction.
+	type rawMap = map[string]any
 
 	tests := []struct {
 		name        string
-		summary     *string
+		payload     rawMap
 		wantErr     bool
-		errSubstr   string
-		wantNil     bool
-		wantSummary string
+		errContains string
+		check       func(t *testing.T, got schemas.BookCreate)
 	}{
+		// ------------------------------------------------------------------ happy paths
 		{
-			name:    "nil summary",
-			summary: nil,
-			wantNil: true,
+			name: "valid minimal (no summary)",
+			payload: rawMap{
+				"title":          "Clean Code",
+				"author":         "Robert C. Martin",
+				"published_year": 2008,
+			},
+			check: func(t *testing.T, got schemas.BookCreate) {
+				assert.Equal(t, "Clean Code", got.Title)
+				assert.Equal(t, "Robert C. Martin", got.Author)
+				assert.Equal(t, 2008, got.PublishedYear)
+				assert.Nil(t, got.Summary)
+			},
 		},
 		{
-			name:    "empty summary normalized to nil",
-			summary: strPtr(""),
-			wantNil: true,
+			name: "valid with summary",
+			payload: rawMap{
+				"title":          "The Go Programming Language",
+				"author":         "Alan Donovan",
+				"published_year": 2015,
+				"summary":        "A comprehensive guide to Go.",
+			},
+			check: func(t *testing.T, got schemas.BookCreate) {
+				assert.Equal(t, "The Go Programming Language", got.Title)
+				assert.Equal(t, "Alan Donovan", got.Author)
+				assert.Equal(t, 2015, got.PublishedYear)
+				require.NotNil(t, got.Summary)
+				assert.Equal(t, "A comprehensive guide to Go.", *got.Summary)
+			},
 		},
 		{
-			name:    "whitespace-only summary normalized to nil",
-			summary: strPtr("   "),
-			wantNil: true,
+			name: "whitespace stripped from title and author",
+			payload: rawMap{
+				"title":          "  Whitespace Book  ",
+				"author":         "  Jane Author  ",
+				"published_year": 2000,
+			},
+			check: func(t *testing.T, got schemas.BookCreate) {
+				assert.Equal(t, "Whitespace Book", got.Title)
+				assert.Equal(t, "Jane Author", got.Author)
+			},
 		},
 		{
-			name:        "valid summary stripped",
-			summary:     strPtr("  A classic tale  "),
-			wantSummary: "A classic tale",
+			name: "whitespace stripped from summary",
+			payload: rawMap{
+				"title":          "Some Book",
+				"author":         "Some Author",
+				"published_year": 2000,
+				"summary":        "  A summary.  ",
+			},
+			check: func(t *testing.T, got schemas.BookCreate) {
+				require.NotNil(t, got.Summary)
+				assert.Equal(t, "A summary.", *got.Summary)
+			},
 		},
 		{
-			name:      "summary exceeds 2000 chars after strip",
-			summary:   strPtr(strings.Repeat("x", 2001)),
-			wantErr:   true,
-			errSubstr: "ensure this value has at most 2000 characters",
+			name: "published_year equal to 1000 (boundary – accepted)",
+			payload: rawMap{
+				"title":          "Ancient Book",
+				"author":         "Old Author",
+				"published_year": 1000,
+			},
+			check: func(t *testing.T, got schemas.BookCreate) {
+				assert.Equal(t, 1000, got.PublishedYear)
+			},
 		},
 		{
-			name:        "summary exactly 2000 chars",
-			summary:     strPtr(strings.Repeat("x", 2000)),
-			wantSummary: strings.Repeat("x", 2000),
+			name: "published_year equal to current year (boundary – accepted)",
+			payload: rawMap{
+				"title":          "New Book",
+				"author":         "New Author",
+				"published_year": cy,
+			},
+			check: func(t *testing.T, got schemas.BookCreate) {
+				assert.Equal(t, cy, got.PublishedYear)
+			},
+		},
+		{
+			name: "summary null → stored as nil",
+			payload: rawMap{
+				"title":          "Book",
+				"author":         "Author",
+				"published_year": 2000,
+				"summary":        nil,
+			},
+			check: func(t *testing.T, got schemas.BookCreate) {
+				assert.Nil(t, got.Summary)
+			},
+		},
+		{
+			name: "summary empty string → normalized to nil",
+			payload: rawMap{
+				"title":          "Book",
+				"author":         "Author",
+				"published_year": 2000,
+				"summary":        "",
+			},
+			check: func(t *testing.T, got schemas.BookCreate) {
+				assert.Nil(t, got.Summary)
+			},
+		},
+		{
+			name: "summary only whitespace → normalized to nil",
+			payload: rawMap{
+				"title":          "Book",
+				"author":         "Author",
+				"published_year": 2000,
+				"summary":        "   ",
+			},
+			check: func(t *testing.T, got schemas.BookCreate) {
+				assert.Nil(t, got.Summary)
+			},
+		},
+		{
+			name: "summary exactly 2000 chars → accepted",
+			payload: rawMap{
+				"title":          "Book",
+				"author":         "Author",
+				"published_year": 2000,
+				"summary":        strings.Repeat("a", 2000),
+			},
+			check: func(t *testing.T, got schemas.BookCreate) {
+				require.NotNil(t, got.Summary)
+				assert.Len(t, *got.Summary, 2000)
+			},
+		},
+		{
+			name: "title exactly 255 chars → accepted",
+			payload: rawMap{
+				"title":          strings.Repeat("t", 255),
+				"author":         "Author",
+				"published_year": 2000,
+			},
+			check: func(t *testing.T, got schemas.BookCreate) {
+				assert.Len(t, got.Title, 255)
+			},
+		},
+		{
+			name: "author exactly 255 chars → accepted",
+			payload: rawMap{
+				"title":          "Book",
+				"author":         strings.Repeat("a", 255),
+				"published_year": 2000,
+			},
+			check: func(t *testing.T, got schemas.BookCreate) {
+				assert.Len(t, got.Author, 255)
+			},
+		},
+
+		// ------------------------------------------------------------------ title errors
+		{
+			name: "title missing → field required",
+			payload: rawMap{
+				"author":         "Author",
+				"published_year": 2000,
+			},
+			wantErr:     true,
+			errContains: "field required",
+		},
+		{
+			name: "title empty string → cannot be empty",
+			payload: rawMap{
+				"title":          "",
+				"author":         "Author",
+				"published_year": 2000,
+			},
+			wantErr:     true,
+			errContains: "Title cannot be empty",
+		},
+		{
+			name: "title only whitespace → cannot be empty",
+			payload: rawMap{
+				"title":          "   ",
+				"author":         "Author",
+				"published_year": 2000,
+			},
+			wantErr:     true,
+			errContains: "Title cannot be empty",
+		},
+		{
+			name: "title 256 chars → too long",
+			payload: rawMap{
+				"title":          strings.Repeat("t", 256),
+				"author":         "Author",
+				"published_year": 2000,
+			},
+			wantErr:     true,
+			errContains: "ensure this value has at most 255 characters",
+		},
+
+		// ------------------------------------------------------------------ author errors
+		{
+			name: "author missing → field required",
+			payload: rawMap{
+				"title":          "Book",
+				"published_year": 2000,
+			},
+			wantErr:     true,
+			errContains: "field required",
+		},
+		{
+			name: "author empty string → cannot be empty",
+			payload: rawMap{
+				"title":          "Book",
+				"author":         "",
+				"published_year": 2000,
+			},
+			wantErr:     true,
+			errContains: "Author cannot be empty",
+		},
+		{
+			name: "author only whitespace → cannot be empty",
+			payload: rawMap{
+				"title":          "Book",
+				"author":         "   ",
+				"published_year": 2000,
+			},
+			wantErr:     true,
+			errContains: "Author cannot be empty",
+		},
+		{
+			name: "author 256 chars → too long",
+			payload: rawMap{
+				"title":          "Book",
+				"author":         strings.Repeat("a", 256),
+				"published_year": 2000,
+			},
+			wantErr:     true,
+			errContains: "ensure this value has at most 255 characters",
+		},
+
+		// ------------------------------------------------------------------ published_year errors
+		{
+			name: "published_year missing → field required",
+			payload: rawMap{
+				"title":  "Book",
+				"author": "Author",
+			},
+			wantErr:     true,
+			errContains: "field required",
+		},
+		{
+			name: "published_year 999 → before year 1000",
+			payload: rawMap{
+				"title":          "Book",
+				"author":         "Author",
+				"published_year": 999,
+			},
+			wantErr:     true,
+			errContains: "Published year must be after year 1000",
+		},
+		{
+			name: "published_year 0 → before year 1000",
+			payload: rawMap{
+				"title":          "Book",
+				"author":         "Author",
+				"published_year": 0,
+			},
+			wantErr:     true,
+			errContains: "Published year must be after year 1000",
+		},
+		{
+			name: "published_year future → cannot be in the future",
+			payload: rawMap{
+				"title":          "Book",
+				"author":         "Author",
+				"published_year": cy + 1,
+			},
+			wantErr:     true,
+			errContains: "Published year cannot be in the future",
+		},
+		{
+			name: "published_year future error message contains current year",
+			payload: rawMap{
+				"title":          "Book",
+				"author":         "Author",
+				"published_year": cy + 1,
+			},
+			wantErr:     true,
+			errContains: "current year:",
+		},
+		{
+			name: "published_year wrong type (string) → type error",
+			payload: rawMap{
+				"title":          "Book",
+				"author":         "Author",
+				"published_year": "not-a-number",
+			},
+			wantErr: true,
+		},
+
+		// ------------------------------------------------------------------ summary errors
+		{
+			name: "summary 2001 chars → too long",
+			payload: rawMap{
+				"title":          "Book",
+				"author":         "Author",
+				"published_year": 2000,
+				"summary":        strings.Repeat("s", 2001),
+			},
+			wantErr:     true,
+			errContains: "ensure this value has at most 2000 characters",
 		},
 	}
 
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			bc := schemas.BookCreate{
-				Title:         "Test Book",
-				Author:        "Author",
-				PublishedYear: year,
-				Summary:       tc.summary,
-			}
-			err := bc.Validate()
+			data, err := json.Marshal(tc.payload)
+			require.NoError(t, err)
+
+			var got schemas.BookCreate
+			err = json.Unmarshal(data, &got)
+
 			if tc.wantErr {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), tc.errSubstr)
+				if tc.errContains != "" {
+					assert.Contains(t, err.Error(), tc.errContains)
+				}
 				return
 			}
+
 			require.NoError(t, err)
-			if tc.wantNil {
-				assert.Nil(t, bc.Summary)
-			} else {
-				require.NotNil(t, bc.Summary)
-				assert.Equal(t, tc.wantSummary, *bc.Summary)
+			if tc.check != nil {
+				tc.check(t, got)
 			}
 		})
 	}
 }
 
-func TestBookCreate_Validate_ValidComplete(t *testing.T) {
-	t.Parallel()
-
-	year := currentYear()
-	summary := "  A great adventure  "
-	bc := schemas.BookCreate{
-		Title:         "  The Hobbit  ",
-		Author:        "  J.R.R. Tolkien  ",
-		PublishedYear: year,
-		Summary:       &summary,
-	}
-	err := bc.Validate()
-	require.NoError(t, err)
-	assert.Equal(t, "The Hobbit", bc.Title)
-	assert.Equal(t, "J.R.R. Tolkien", bc.Author)
-	assert.Equal(t, year, bc.PublishedYear)
-	require.NotNil(t, bc.Summary)
-	assert.Equal(t, "A great adventure", *bc.Summary)
-}
-
 // ---------------------------------------------------------------------------
-// BookCreate invariants: 255-char limit evaluated on pre-strip value
+// BookUpdate – UnmarshalJSON
 // ---------------------------------------------------------------------------
 
-func TestBookCreate_Validate_TitleLimit_PreStrip(t *testing.T) {
-	t.Parallel()
+func TestBookUpdate_UnmarshalJSON(t *testing.T) {
+	cy := currentYear()
 
-	// A title that is 256 chars total but would be ≤255 after stripping
-	// the one leading space. Per spec the limit is on the pre-strip value.
-	title := " " + strings.Repeat("a", 255) // 256 chars total
-	bc := schemas.BookCreate{
-		Title:         title,
-		Author:        "Author",
-		PublishedYear: currentYear(),
-	}
-	err := bc.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ensure this value has at most 255 characters")
-}
-
-func TestBookCreate_Validate_AuthorLimit_PreStrip(t *testing.T) {
-	t.Parallel()
-
-	author := " " + strings.Repeat("b", 255) // 256 chars total
-	bc := schemas.BookCreate{
-		Title:         "Test",
-		Author:        author,
-		PublishedYear: currentYear(),
-	}
-	err := bc.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ensure this value has at most 255 characters")
-}
-
-// ---------------------------------------------------------------------------
-// BookUpdate – Validate (all fields optional)
-// ---------------------------------------------------------------------------
-
-func TestBookUpdate_Validate_AllNil(t *testing.T) {
-	t.Parallel()
-
-	bu := schemas.BookUpdate{}
-	err := bu.Validate()
-	require.NoError(t, err)
-	assert.Nil(t, bu.Title)
-	assert.Nil(t, bu.Author)
-	assert.Nil(t, bu.PublishedYear)
-	assert.Nil(t, bu.Summary)
-}
-
-func TestBookUpdate_Validate_Title(t *testing.T) {
-	t.Parallel()
-
-	year := currentYear()
+	type rawMap = map[string]any
 
 	tests := []struct {
-		name      string
-		title     *string
-		wantErr   bool
-		errSubstr string
-		wantTitle *string
+		name        string
+		payload     rawMap
+		wantErr     bool
+		errContains string
+		check       func(t *testing.T, got schemas.BookUpdate)
 	}{
+		// ------------------------------------------------------------------ happy paths
 		{
-			name:      "nil title passes",
-			title:     nil,
-			wantErr:   false,
-			wantTitle: nil,
+			name:    "empty object → all fields nil",
+			payload: rawMap{},
+			check: func(t *testing.T, got schemas.BookUpdate) {
+				assert.Nil(t, got.Title)
+				assert.Nil(t, got.Author)
+				assert.Nil(t, got.PublishedYear)
+				assert.Nil(t, got.Summary)
+			},
 		},
 		{
-			name:      "empty title errors",
-			title:     strPtr(""),
-			wantErr:   true,
-			errSubstr: "Title cannot be empty",
+			name: "all fields valid",
+			payload: rawMap{
+				"title":          "Updated Title",
+				"author":         "Updated Author",
+				"published_year": 2021,
+				"summary":        "Updated summary.",
+			},
+			check: func(t *testing.T, got schemas.BookUpdate) {
+				require.NotNil(t, got.Title)
+				assert.Equal(t, "Updated Title", *got.Title)
+				require.NotNil(t, got.Author)
+				assert.Equal(t, "Updated Author", *got.Author)
+				require.NotNil(t, got.PublishedYear)
+				assert.Equal(t, 2021, *got.PublishedYear)
+				require.NotNil(t, got.Summary)
+				assert.Equal(t, "Updated summary.", *got.Summary)
+			},
 		},
 		{
-			name:      "whitespace-only title errors",
-			title:     strPtr("   "),
-			wantErr:   true,
-			errSubstr: "Title cannot be empty",
+			name: "title null → title stays nil",
+			payload: rawMap{
+				"title":          nil,
+				"author":         "Author",
+				"published_year": 2000,
+			},
+			check: func(t *testing.T, got schemas.BookUpdate) {
+				assert.Nil(t, got.Title)
+			},
 		},
 		{
-			name:      "title > 255 chars errors",
-			title:     strPtr(strings.Repeat("a", 256)),
-			wantErr:   true,
-			errSubstr: "ensure this value has at most 255 characters",
+			name: "author null → author stays nil",
+			payload: rawMap{
+				"title":          "Book",
+				"author":         nil,
+				"published_year": 2000,
+			},
+			check: func(t *testing.T, got schemas.BookUpdate) {
+				assert.Nil(t, got.Author)
+			},
 		},
 		{
-			name:      "valid title stripped",
-			title:     strPtr("  Go Programming  "),
-			wantErr:   false,
-			wantTitle: strPtr("Go Programming"),
+			name: "published_year null → published_year stays nil",
+			payload: rawMap{
+				"title":          "Book",
+				"author":         "Author",
+				"published_year": nil,
+			},
+			check: func(t *testing.T, got schemas.BookUpdate) {
+				assert.Nil(t, got.PublishedYear)
+			},
 		},
-	}
-
-	for _, tc := range tests {
-		tc := tc
+		{
+			name: "summary null → summary stays nil",
+			payload: rawMap{
+				"title":   "Book",
+				"author":  "Author",
+				"summary": nil,
+			},
+			check: func(t *testing.T, got schemas.BookUpdate) {
+				assert.Nil(t, got.Summary)
+			},
