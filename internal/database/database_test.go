@@ -1,127 +1,157 @@
-package database
+// internal/database_test.go
+package internal
 
 import (
-	"net/http"
-	"net/http/httptest"
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/jmoiron/sqlx"
+	_ "github.com/lib/pq"
 )
 
-// Mocking the necessary interfaces for testing
-type MockSyncEngine struct{}
-
-func (m *MockSyncEngine) CreateTables(models ...interface{}) error {
-	// Mock implementation to verify table creation
-	return nil
+type MockDB struct {
+	mock.Mock
 }
 
-type MockAsyncSession struct{}
-
-func (m *MockAsyncSession) Close() error {
-	// Mock implementation to verify session closure
-	return nil
+func (m *MockDB) PingContext(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
 }
 
-type MockSession struct{}
-
-func (m *MockSession) Close() error {
-	// Mock implementation to verify session closure
-	return nil
+func (m *MockDB) Exec(query string, args ...interface{}) (sql.Result, error) {
+	return &sql.Rows{}, nil
 }
 
-// TestInitDB tests the init_db function with different scenarios.
-func TestInitDB(t *testing.T) {
-	tests := []struct {
-		name            string
-		syncEngine      *MockSyncEngine
-		expectedErr     bool
-		expectedSideEff func(*MockSyncEngine)
-	}{
-		{
-			name:        "successful table creation",
-			syncEngine:  &MockSyncEngine{},
-			expectedErr: false,
-			expectedSideEff: func(syncEngine *MockSyncEngine) {
-				// Verify that tables are created
-			},
-		},
-		// Add more test cases as needed
+type MockSQLXDB struct {
+	*MockDB
+}
+
+func (m *MockSQLXDB) NewDb(db *sql.DB, driverName string) (*sqlx.DB, error) {
+	args := m.Called(db, driverName)
+	return args.Get(0).(*sqlx.DB), args.Error(1)
+}
+
+func TestInitializeDatabase(t *testing.T) {
+	type testCase struct {
+		name                  string
+		mockPing              func(context.Context) error
+		mockCreateSchema      func(context.Context, *sql.DB) error
+		expectedErrorMessage  string
+		expectedSchemaCreated bool
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			init_db(tt.syncEngine)
-			if tt.expectedSideEff != nil {
-				tt.expectedSideEff(tt.syncEngine)
+	testCases := []testCase{
+		{
+			name:                  "success",
+			mockPing:              func(ctx context.Context) error { return nil },
+			mockCreateSchema:      func(ctx context.Context, db *sql.DB) error { return nil },
+			expectedErrorMessage:  "",
+			expectedSchemaCreated: true,
+		},
+		{
+			name:                  "ping fails",
+			mockPing:              func(ctx context.Context) error { return errors.New("ping failed") },
+			mockCreateSchema:      func(ctx context.Context, db *sql.DB) error { return nil },
+			expectedErrorMessage:  "failed to ping sync database: ping failed",
+			expectedSchemaCreated: false,
+		},
+		{
+			name:                  "create schema fails",
+			mockPing:              func(ctx context.Context) error { return nil },
+			mockCreateSchema:      func(ctx context.Context, db *sql.DB) error { return errors.New("schema creation failed") },
+			expectedErrorMessage:  "error initializing database: schema creation failed",
+			expectedSchemaCreated: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockDB := new(MockDB)
+			mockDB.On("PingContext", mock.Anything).Return(tc.mockPing(mock.Anything))
+			model.CreateSchema = tc.mockCreateSchema
+
+			err := InitializeDatabase(context.Background())
+			if tc.expectedErrorMessage != "" {
+				assert.EqualError(t, err, tc.expectedErrorMessage)
+			} else {
+				assert.NoError(t, err)
 			}
-			assert.NoError(t, tt.expectedErr)
+
+			if tc.expectedSchemaCreated {
+				mockDB.AssertCalled(t, "PingContext", mock.Anything)
+			} else {
+				mockDB.AssertNotCalled(t, "PingContext", mock.Anything)
+			}
+			model.CreateSchema = model.CreateSchemaImpl // reset to original implementation
 		})
 	}
 }
 
-// TestGetDB tests the get_db function with different scenarios.
-func TestGetDB(t *testing.T) {
-	tests := []struct {
-		name            string
-		httpRequest     *http.Request
-		expectedOutput  interface{}
-		expectedSideEff func(*MockAsyncSession)
-		expectedError   error
-	}{
-		{
-			name:         "successful async session yield",
-			httpRequest:  httptest.NewRequest(http.MethodGet, "/", nil),
-			expectedOutput: &MockAsyncSession{},
-			expectedSideEff: func(session *MockAsyncSession) {
-				// Verify that the session is closed
-			},
-			expectedError: nil,
-		},
-		// Add more test cases as needed
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			w := httptest.NewRecorder()
-			r := tt.httpRequest
-			session, err := get_db(w, r)
-			assert.Equal(t, tt.expectedOutput, session)
-			assert.Equal(t, tt.expectedError, err)
-			if tt.expectedSideEff != nil {
-				tt.expectedSideEff(session.(*MockAsyncSession))
-			}
-		})
-	}
-}
-
-// TestGetSyncDB tests the get_sync_db function with different scenarios.
 func TestGetSyncDB(t *testing.T) {
-	tests := []struct {
+	type testCase struct {
 		name            string
-		expectedOutput  interface{}
-		expectedSideEff func(*MockSession)
-		expectedError   error
-	}{
-		{
-			name:         "successful sync session yield",
-			expectedOutput: &MockSession{},
-			expectedSideEff: func(session *MockSession) {
-				// Verify that the session is closed
-			},
-			expectedError: nil,
-		},
-		// Add more test cases as needed
+		expectedErr     error
+		expectedSession *sql.DB
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			session, err := get_sync_db()
-			assert.Equal(t, tt.expectedOutput, session)
-			assert.Equal(t, tt.expectedError, err)
-			if tt.expectedSideEff != nil {
-				tt.expectedSideEff(session.(*MockSession))
-			}
+	testCases := []testCase{
+		{
+			name:            "initialized",
+			expectedErr:     nil,
+			expectedSession: &sql.DB{},
+		},
+		{
+			name:            "not initialized",
+			expectedErr:     errors.New("sync database not initialized"),
+			expectedSession: nil,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			syncDB = tc.expectedSession
+			session, err := GetSyncDB()
+			assert.Equal(t, tc.expectedErr, err)
+			assert.Equal(t, tc.expectedSession, session)
+		})
+	}
+}
+
+func TestGetAsyncDB(t *testing.T) {
+	type testCase struct {
+		name            string
+		mockPing        func(context.Context) error
+		expectedErr     error
+		expectedSession *sqlx.DB
+	}
+
+	testCases := []testCase{
+		{
+			name:            "initialized",
+			mockPing:        func(ctx context.Context) error { return nil },
+			expectedErr:     nil,
+			expectedSession: &sqlx.DB{},
+		},
+		{
+			name:            "not initialized",
+			mockPing:        func(ctx context.Context) error { return errors.New("ping failed") },
+			expectedErr:     errors.New("async database not initialized"),
+			expectedSession: nil,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockDB := new(MockDB)
+			mockDB.On("PingContext", mock.Anything).Return(tc.mockPing(mock.Anything))
+
+			asyncDB = tc.expectedSession
+			session, err := GetAsyncDB(context.Background())
+			assert.Equal(t, tc.expectedErr, err)
+			assert.Equal(t, tc.expectedSession, session)
+			mockDB.AssertExpectations(t)
 		})
 	}
 }
