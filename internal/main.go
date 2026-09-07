@@ -136,7 +136,7 @@ func createBookHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer database.CloseSyncDB(db)
 
-	book := NewBook(bookCreate.Title, bookCreate.Author, bookCreate.PublishedYear, bookCreate.Summary)
+	book, _ := NewBook(bookCreate.Title, bookCreate.Author, bookCreate.PublishedYear, bookCreate.Summary)
 	if err := book.Create(context.Background(), db); err != nil {
 		if _, ok := err.(*model.UniqueConstraintViolationError); ok {
 			http.Error(w, "Book with this title and author already exists", http.StatusBadRequest)
