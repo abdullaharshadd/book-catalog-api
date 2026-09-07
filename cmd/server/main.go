@@ -9,15 +9,20 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"migrated-app/internal"
 )
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	cfg, err := internal.Config.Load()
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to load config")
+	}
 	srv := &http.Server{
-		Addr:    ":8080",
-		Handler: buildRouter(),
+		Addr:    ":" + cfg.Port,
+		Handler: internal.buildRouter(),
 	}
 
 	go func() {
@@ -26,7 +31,7 @@ func main() {
 		}
 	}()
 
-	log.Info().Msg("server started on :8080")
+	log.Info().Msg("server started on :" + cfg.Port)
 	<-ctx.Done()
 
 	shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
