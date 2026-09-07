@@ -11,7 +11,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"migrated-app/internal"
 	"migrated-app/internal/config"
-	"migrated-app/internal/database"
+	"migrated-app/pkg/database"
 )
 
 func main() {
