@@ -12,9 +12,9 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jmoiron/sqlx"
 	"go.uber.org/zap"
-	"migrated-app/internal/database"
-	"migrated-app/internal/model"
-	"migrated-app/internal/schemas"
+	./database
+	./model
+	./schemas
 	"errors"
 )
 
