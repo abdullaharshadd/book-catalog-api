@@ -1,77 +1,99 @@
 // internal/database.go
-package internal
+package database
 
 import (
 	"context"
 	"errors"
-	"log"
+	"fmt"
 	"os"
 	"sync"
 
-	"database/sql"
 	"github.com/jmoiron/sqlx"
-	"migrated-app/internal/model"
+	"github.com/pressly/goose/v3"
+	_ "github.com/lib/pq"
+	"log"
 )
 
 var (
-	syncDBOnce sync.Once
-	asyncDBOnce sync.Once
-	syncDB     *sql.DB
-	asyncDB    *sqlx.DB
+	dbOnce sync.Once
+	db *sql.DB
+	asyncDB *sqlx.DB
 )
 
+// InitializeDatabase initializes the database connections and runs migrations.
 func InitializeDatabase(ctx context.Context) error {
-	var err error
-	syncDBOnce.Do(func() {
+	// Ensure that the database is initialized only once
+	dbOnce.Do(func() {
+		var err error
 		databaseURL := os.Getenv("DATABASE_URL")
 		if databaseURL == "" {
-			databaseURL = "postgres://user:password@localhost:5432/books"
+			databaseURL = "postgres://user:password@localhost:5432/books?sslmode=disable"
 		}
-		syncDB, err = sql.Open("postgres", databaseURL)
+
+		// Initialize the sync database connection
+		db, err = sql.Open("postgres", databaseURL)
 		if err != nil {
-			log.Fatalf("failed to open sync database connection: %v", err)
+			log.Fatalf("Error opening database: %v", err)
+			return
 		}
-		if err := syncDB.PingContext(ctx); err != nil {
-			log.Fatalf("failed to ping sync database: %v", err)
+		if err := db.PingContext(ctx); err != nil {
+			log.Fatalf("Error pinging database: %v", err)
+			return
+		}
+
+		// Initialize the async database connection
+		asyncDB, err = sqlx.Connect("postgres", databaseURL)
+		if err != nil {
+			log.Fatalf("Error connecting to async database: %v", err)
+			return
+		}
+		if err := asyncDB.PingContext(ctx); err != nil {
+			log.Fatalf("Error pinging async database: %v", err)
+			return
+		}
+
+		// Run migrations to create the schema
+		if err := InitializeMigrations(ctx, db); err != nil && !errors.Is(err, goose.ErrMigrationAppliedAlready) {
+			log.Fatalf("Error running migrations: %v", err)
+			return err
 		}
 	})
 
-	asyncDBOnce.Do(func() {
-		asyncDatabaseURL := os.Getenv("ASYNC_DATABASE_URL")
-		if asyncDatabaseURL == "" {
-			asyncDatabaseURL = "postgres://user:password@localhost:5432/books?sslmode=disable"
-		}
-		asyncDB, err = sql.Open("postgres", asyncDatabaseURL)
-		if err != nil {
-			log.Fatalf("failed to open async database connection: %v", err)
-		}
-		asyncSqlxDB := sqlx.NewDb(asyncDB, "postgres")
-		if err := asyncSqlxDB.PingContext(ctx); err != nil {
-			log.Fatalf("failed to ping async database: %v", err)
-		}
-		asyncDB = asyncSqlxDB
-	})
-
-	if err != nil {
-		return errors.Wrap(err, "error initializing database")
-	}
-
-	return model.CreateSchema(ctx, syncDB)
+	return nil
 }
 
-func GetSyncDB() (*sql.DB, error) {
-	if syncDB == nil {
-		return nil, errors.New("sync database not initialized")
-	}
-	return syncDB, nil
+// GetDB returns the synchronous database connection.
+func GetDB() *sql.DB {
+	return db
 }
 
+// GetAsyncDB returns the asynchronous database connection.
 func GetAsyncDB(ctx context.Context) (*sqlx.DB, error) {
 	if asyncDB == nil {
-		return nil, errors.New("async database not initialized")
+		return nil, fmt.Errorf("async database not initialized")
 	}
 	return asyncDB, nil
 }
 
-// MIGRATION_NOTE: The original Python code used a synchronous session for schema creation.
-// In Go, we use a dedicated function to create the schema at startup.
+// internal/database_migrations.go
+package database
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"github.com/pressly/goose/v3"
+	_ "github.com/lib/pq"
+	"log"
+)
+
+//go:embed migrations/*.sql
+var migrations embed.FS
+
+func InitializeMigrations(ctx context.Context, db *sql.DB) error {
+	if err := goose.SetDialect("postgres"); err != nil {
+		log.Fatalf("Failed to set dialect: %v", err)
+		return err
+	}
+	return goose.UpDB(db, migrations, "migrations")
+}
