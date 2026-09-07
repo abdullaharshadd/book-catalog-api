@@ -15,11 +15,9 @@ package schemas
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
-
 	"migrated-app/internal/model"
 )
 ```
@@ -372,12 +370,6 @@ func currentYear() int { return time.Now().Year() }
 // BookCreate is the validated request body for creating a Book. All business
 // rules from the source schema are enforced during JSON decoding, so a
 // successfully-decoded value is always valid.
-type BookCreate struct {
-	Title         string
-	Author        string
-	PublishedYear int
-	Summary       *string
-}
 
 // bookWire is the raw JSON shape used for decoding both create and update
 // payloads. Pointer fields let us distinguish "absent" from "present".
@@ -390,88 +382,12 @@ type bookWire struct {
 
 // UnmarshalJSON decodes and validates a create payload, enforcing required
 // fields and all field-level business rules.
-func (b *BookCreate) UnmarshalJSON(data []byte) error {
-	var w bookWire
-	if err := json.Unmarshal(data, &w); err != nil {
-		return err
-	}
-	if w.Title == nil {
-		return fmt.Errorf("title: field required")
-	}
-	if w.Author == nil {
-		return fmt.Errorf("author: field required")
-	}
-	if w.PublishedYear == nil {
-		return fmt.Errorf("published_year: field required")
-	}
-
-	title, err := validateName("title", "Title", *w.Title)
-	if err != nil {
-		return err
-	}
-	author, err := validateName("author", "Author", *w.Author)
-	if err != nil {
-		return err
-	}
-	year, err := validatePublishedYear("published_year", *w.PublishedYear)
-	if err != nil {
-		return err
-	}
-	summary, err := validateSummary("summary", w.Summary)
-	if err != nil {
-		return err
-	}
-
-	b.Title, b.Author, b.PublishedYear, b.Summary = title, author, year, summary
-	return nil
-}
 
 // BookUpdate is the validated request body for a partial update. Every field
 // is optional; only fields present in the payload are decoded and validated.
-type BookUpdate struct {
-	Title         *string
-	Author        *string
-	PublishedYear *int
-	Summary       *string
-}
 
 // UnmarshalJSON decodes and validates an update payload. Absent fields remain
 // nil; present fields are validated with the same rules as on create.
-func (b *BookUpdate) UnmarshalJSON(data []byte) error {
-	var w bookWire
-	if err := json.Unmarshal(data, &w); err != nil {
-		return err
-	}
-	if w.Title != nil {
-		t, err := validateName("title", "Title", *w.Title)
-		if err != nil {
-			return err
-		}
-		b.Title = &t
-	}
-	if w.Author != nil {
-		a, err := validateName("author", "Author", *w.Author)
-		if err != nil {
-			return err
-		}
-		b.Author = &a
-	}
-	if w.PublishedYear != nil {
-		y, err := validatePublishedYear("published_year", *w.PublishedYear)
-		if err != nil {
-			return err
-		}
-		b.PublishedYear = &y
-	}
-	if w.Summary != nil {
-		s, err := validateSummary("summary", w.Summary)
-		if err != nil {
-			return err
-		}
-		b.Summary = s
-	}
-	return nil
-}
 
 // validateName trims whitespace and enforces the non-empty / max-length rules
 // shared by the title and author fields.
@@ -515,13 +431,6 @@ func validateSummary(field string, v *string) (*string, error) {
 
 // BookResponse is the wire representation of a Book returned to clients. It is
 // the Go equivalent of the Pydantic response schema with from_attributes=True.
-type BookResponse struct {
-	ID            int     `json:"id"`
-	Title         string  `json:"title"`
-	Author        string  `json:"author"`
-	PublishedYear int     `json:"published_year"`
-	Summary       *string `json:"summary"`
-}
 
 // NewBookResponse builds a BookResponse from a persistence model, mirroring
 // Pydantic's ORM-mode (from_attributes) construction.
@@ -568,12 +477,6 @@ const (
 func currentYear() int { return time.Now().Year() }
 
 // BookCreate is the validated request body for creating a Book.
-type BookCreate struct {
-	Title         string
-	Author        string
-	PublishedYear int
-	Summary       *string
-}
 
 type bookWire struct {
 	Title         *string `json:"title"`
@@ -583,84 +486,10 @@ type bookWire struct {
 }
 
 // UnmarshalJSON decodes and validates a create payload.
-func (b *BookCreate) UnmarshalJSON(data []byte) error {
-	var w bookWire
-	if err := json.Unmarshal(data, &w); err != nil {
-		return err
-	}
-	if w.Title == nil {
-		return fmt.Errorf("title: field required")
-	}
-	if w.Author == nil {
-		return fmt.Errorf("author: field required")
-	}
-	if w.PublishedYear == nil {
-		return fmt.Errorf("published_year: field required")
-	}
-	title, err := validateName("title", "Title", *w.Title)
-	if err != nil {
-		return err
-	}
-	author, err := validateName("author", "Author", *w.Author)
-	if err != nil {
-		return err
-	}
-	year, err := validatePublishedYear("published_year", *w.PublishedYear)
-	if err != nil {
-		return err
-	}
-	summary, err := validateSummary("summary", w.Summary)
-	if err != nil {
-		return err
-	}
-	b.Title, b.Author, b.PublishedYear, b.Summary = title, author, year, summary
-	return nil
-}
 
 // BookUpdate is the validated request body for a partial update.
-type BookUpdate struct {
-	Title         *string
-	Author        *string
-	PublishedYear *int
-	Summary       *string
-}
 
 // UnmarshalJSON decodes and validates an update payload.
-func (b *BookUpdate) UnmarshalJSON(data []byte) error {
-	var w bookWire
-	if err := json.Unmarshal(data, &w); err != nil {
-		return err
-	}
-	if w.Title != nil {
-		t, err := validateName("title", "Title", *w.Title)
-		if err != nil {
-			return err
-		}
-		b.Title = &t
-	}
-	if w.Author != nil {
-		a, err := validateName("author", "Author", *w.Author)
-		if err != nil {
-			return err
-		}
-		b.Author = &a
-	}
-	if w.PublishedYear != nil {
-		y, err := validatePublishedYear("published_year", *w.PublishedYear)
-		if err != nil {
-			return err
-		}
-		b.PublishedYear = &y
-	}
-	if w.Summary != nil {
-		s, err := validateSummary("summary", w.Summary)
-		if err != nil {
-			return err
-		}
-		b.Summary = s
-	}
-	return nil
-}
 
 func validateName(field, label, v string) (string, error) {
 	stripped := strings.TrimSpace(v)
@@ -698,21 +527,5 @@ func validateSummary(field string, v *string) (*string, error) {
 }
 
 // BookResponse is the wire representation of a Book returned to clients.
-type BookResponse struct {
-	ID            int     `json:"id"`
-	Title         string  `json:"title"`
-	Author        string  `json:"author"`
-	PublishedYear int     `json:"published_year"`
-	Summary       *string `json:"summary"`
-}
 
 // NewBookResponse builds a BookResponse from a persistence model.
-func NewBookResponse(b *model.Book) BookResponse {
-	return BookResponse{
-		ID:            b.ID,
-		Title:         b.Title,
-		Author:        b.Author,
-		PublishedYear: b.PublishedYear,
-		Summary:       b.Summary,
-	}
-}
