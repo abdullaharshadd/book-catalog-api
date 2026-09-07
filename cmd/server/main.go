@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"migrated-app/internal/main"
+	"migrated-app/internal"
 	"migrated-app/internal/config"
-	"migrated-app/pkg/database"
+	"migrated-app/internal/database"
 )
 
 func main() {
