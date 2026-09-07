@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"migrated-app/internal/config"
 	"migrated-app/pkg/database"
-	"strings"
 )
 
 // MIGRATION_NOTE: The UniqueConstraint from SQLAlchemy is handled by the database schema directly.
@@ -52,12 +51,6 @@ func CreateBooksTable(db *database.DB) error {
 }
 
 // InitModel initializes the model by creating necessary tables.
-func InitModel(db *database.DB) error {
-	if err := CreateBooksTable(db); err != nil {
-		return fmt.Errorf("error initializing model: %w", err)
-	}
-	return nil
-}
 
 // NewBook creates a new book instance.
 func NewBook(title, author string, publishedYear int, summary string) (*Book, error) {
