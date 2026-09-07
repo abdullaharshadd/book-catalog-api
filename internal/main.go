@@ -3,19 +3,16 @@ package internal
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/jmoiron/sqlx"
 	"go.uber.org/zap"
-	./database
-	./model
-	./schemas
-	"errors"
+	"migrated-app/internal/database"
+	"migrated-app/internal/model"
+	"migrated-app/internal/schemas"
 )
 
 var logger *zap.Logger
@@ -26,6 +23,11 @@ func init() {
 	if err != nil {
 		panic(err)
 	}
+}
+
+// BuildRouter creates and returns the main router for the application.
+func BuildRouter() http.Handler {
+	return buildRouter()
 }
 
 // buildRouter creates and returns the main router for the application.
@@ -49,8 +51,8 @@ func buildRouter() http.Handler {
 func rootHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"message": "Welcome to Book Catalog API",
-		"version": "1.0.0",
+		"message":  "Welcome to Book Catalog API",
+		"version":  "1.0.0",
 		"docs_url": "/docs",
 	})
 }
@@ -67,12 +69,12 @@ func listBooksHandler(w http.ResponseWriter, r *http.Request) {
 		limitInt = 1000
 	}
 
-	db, err := database.GetSyncDB()
+	db, err := database.GetSyncDB(context.Background())
 	if err != nil {
 		http.Error(w, "Failed to get database", http.StatusInternalServerError)
 		return
 	}
-	defer database.CloseSyncDB(db)
+	defer database.CloseSyncDB(context.Background(), db)
 
 	books, err := model.ListBooks(context.Background(), db, skipInt, limitInt)
 	if err != nil {
@@ -94,16 +96,16 @@ func getBookHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	db, err := database.GetSyncDB()
+	db, err := database.GetSyncDB(context.Background())
 	if err != nil {
 		http.Error(w, "Failed to get database", http.StatusInternalServerError)
 		return
 	}
-	defer database.CloseSyncDB(db)
+	defer database.CloseSyncDB(context.Background(), db)
 
 	book, err := model.GetBookByID(context.Background(), db, bookID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, model.ErrNotFound) {
 			http.Error(w, "Book not found", http.StatusNotFound)
 			return
 		}
@@ -129,15 +131,19 @@ func createBookHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	db, err := database.GetSyncDB()
+	db, err := database.GetSyncDB(context.Background())
 	if err != nil {
 		http.Error(w, "Failed to get database", http.StatusInternalServerError)
 		return
 	}
-	defer database.CloseSyncDB(db)
+	defer database.CloseSyncDB(context.Background(), db)
 
-	book, _ := NewBook(bookCreate.Title, bookCreate.Author, bookCreate.PublishedYear, bookCreate.Summary)
-	if err := book.Create(context.Background(), db); err != nil {
+	book, err := NewBook(bookCreate.Title, bookCreate.Author, bookCreate.PublishedYear, bookCreate.Summary)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := model.CreateBook(context.Background(), db, book); err != nil {
 		if _, ok := err.(*model.UniqueConstraintViolationError); ok {
 			http.Error(w, "Book with this title and author already exists", http.StatusBadRequest)
 			return
@@ -167,16 +173,16 @@ func updateBookHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	db, err := database.GetSyncDB()
+	db, err := database.GetSyncDB(context.Background())
 	if err != nil {
 		http.Error(w, "Failed to get database", http.StatusInternalServerError)
 		return
 	}
-	defer database.CloseSyncDB(db)
+	defer database.CloseSyncDB(context.Background(), db)
 
 	book, err := model.GetBookByID(context.Background(), db, bookID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, model.ErrNotFound) {
 			http.Error(w, "Book not found", http.StatusNotFound)
 			return
 		}
@@ -185,7 +191,7 @@ func updateBookHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := book.Update(context.Background(), db, bookUpdate); err != nil {
+	if err := model.UpdateBook(context.Background(), db, book, bookUpdate); err != nil {
 		if _, ok := err.(*model.UniqueConstraintViolationError); ok {
 			http.Error(w, "Book with this title and author already exists", http.StatusBadRequest)
 			return
@@ -208,16 +214,16 @@ func deleteBookHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	db, err := database.GetSyncDB()
+	db, err := database.GetSyncDB(context.Background())
 	if err != nil {
 		http.Error(w, "Failed to get database", http.StatusInternalServerError)
 		return
 	}
-	defer database.CloseSyncDB(db)
+	defer database.CloseSyncDB(context.Background(), db)
 
 	book, err := model.GetBookByID(context.Background(), db, bookID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, model.ErrNotFound) {
 			http.Error(w, "Book not found", http.StatusNotFound)
 			return
 		}
@@ -226,7 +232,7 @@ func deleteBookHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := book.Delete(context.Background(), db); err != nil {
+	if err := model.DeleteBook(context.Background(), db, book); err != nil {
 		logger.Error("Error deleting book", zap.Error(err))
 		http.Error(w, "Internal server error while deleting book", http.StatusInternalServerError)
 		return
@@ -239,7 +245,23 @@ func deleteBookHandler(w http.ResponseWriter, r *http.Request) {
 func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"status": "healthy",
+		"status":  "healthy",
 		"service": "book-catalog-api",
 	})
+}
+
+// NewBook creates a new Book instance.
+func NewBook(title, author string, publishedYear int, summary *string) (*Book, error) {
+	if title == "" || author == "" || publishedYear <= 0 {
+		return nil, errors.New("title, author, and publishedYear are required")
+	}
+	b := &Book{
+		Title:         title,
+		Author:        author,
+		PublishedYear: publishedYear,
+	}
+	if summary != nil {
+		b.Summary = *summary
+	}
+	return b, nil
 }
