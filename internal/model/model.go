@@ -1,4 +1,4 @@
-Let me check the module path. The doc_test.go imports "github.com/yourusername/bookcatalog/internal" but go.mod says "migrated-app". Let me verify.
+Let me check the module path. The doc_test.go imports "migrated-app/internal" but go.mod says "migrated-app". Let me verify.
 
 The instructions are explicit: module path is exactly "migrated-app". I'll use that. Let me write the model file with schema creation.
 
