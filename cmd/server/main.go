@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	./internal
+	migrated-app/internal
 	"migrated-app/internal/config"
 	"migrated-app/internal/database"
 )
