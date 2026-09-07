@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"migrated-app/internal/config"
-	"migrated-app/pkg/database"
+	"internal/database"
 )
 
 // MIGRATION_NOTE: The UniqueConstraint from SQLAlchemy is handled by the database schema directly.
