@@ -3,97 +3,214 @@ package database
 
 import (
 	"context"
-	"errors"
+	"database/sql"
 	"fmt"
+	"log"
 	"os"
-	"sync"
 
 	"github.com/jmoiron/sqlx"
-	"github.com/pressly/goose/v3"
-	_ "github.com/lib/pq"
-	"log"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+	"migrated-app/internal/model"
+	"migrated-app/internal/schemas"
 )
 
 var (
-	dbOnce sync.Once
-	db *sql.DB
-	asyncDB *sqlx.DB
+	db          *gorm.DB
+	asyncDb     *sqlx.DB
+	err         error
+	migrationUp = "migrations/0001_init.up.sql"
 )
 
-// InitializeDatabase initializes the database connections and runs migrations.
-func InitializeDatabase(ctx context.Context) error {
-	// Ensure that the database is initialized only once
-	dbOnce.Do(func() {
-		var err error
-		databaseURL := os.Getenv("DATABASE_URL")
-		if databaseURL == "" {
-			databaseURL = "postgres://user:password@localhost:5432/books?sslmode=disable"
-		}
+func InitializeDatabase() {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "host=localhost user=postgres password=postgres dbname=books sslmode=disable"
+	}
 
-		// Initialize the sync database connection
-		db, err = sql.Open("postgres", databaseURL)
-		if err != nil {
-			log.Fatalf("Error opening database: %v", err)
-			return
-		}
-		if err := db.PingContext(ctx); err != nil {
-			log.Fatalf("Error pinging database: %v", err)
-			return
-		}
+	db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		log.Fatalf("failed to connect database: %v", err)
+	}
 
-		// Initialize the async database connection
-		asyncDB, err = sqlx.Connect("postgres", databaseURL)
-		if err != nil {
-			log.Fatalf("Error connecting to async database: %v", err)
-			return
-		}
-		if err := asyncDB.PingContext(ctx); err != nil {
-			log.Fatalf("Error pinging async database: %v", err)
-			return
-		}
+	asyncDb, err = sqlx.Connect("postgres", dsn)
+	if err != nil {
+		log.Fatalf("failed to connect async database: %v", err)
+	}
 
-		// Run migrations to create the schema
-		if err := InitializeMigrations(ctx, db); err != nil && !errors.Is(err, goose.ErrMigrationAppliedAlready) {
-			log.Fatalf("Error running migrations: %v", err)
-			return err
-		}
-	})
+	CreateSchema(context.Background())
+}
+
+func CreateSchema(ctx context.Context) error {
+	// Using go:embed to run SQL migrations
+	var migrationBytes []byte
+	migrationBytes, err = embed.ReadFile(migrationUp)
+	if err != nil {
+		return fmt.Errorf("failed to read migration file: %w", err)
+	}
+
+	_, err = asyncDb.ExecContext(ctx, string(migrationBytes))
+	if err != nil {
+		return fmt.Errorf("failed to execute migration: %w", err)
+	}
 
 	return nil
 }
 
-// GetDB returns the synchronous database connection.
-func GetDB() *sql.DB {
+func GetDB() *gorm.DB {
 	return db
 }
 
-// GetAsyncDB returns the asynchronous database connection.
-func GetAsyncDB(ctx context.Context) (*sqlx.DB, error) {
-	if asyncDB == nil {
-		return nil, fmt.Errorf("async database not initialized")
-	}
-	return asyncDB, nil
+func GetAsyncDB() *sqlx.DB {
+	return asyncDb
 }
 
-// internal/database_migrations.go
-package database
+func NewTransaction(ctx context.Context) (*sqlx.Tx, error) {
+	tx := asyncDb.MustBegin()
+	return tx, nil
+}
+
+// MIGRATION_NOTE: The original Python code uses a generator for database sessions.
+// In Go, we handle transactions manually and ensure the session is closed after use.
+func GetSession(ctx context.Context) (*sqlx.Tx, error) {
+	tx, err := NewTransaction(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+
+	return tx, nil
+}
+
+func CloseSession(tx *sqlx.Tx) {
+	if tx != nil {
+		tx.Rollback()
+	}
+}
+
+func CommitSession(tx *sqlx.Tx) error {
+	return tx.Commit()
+}
+
+// Example usage of the database within a function
+func ListBooks(ctx context.Context) ([]model.Book, error) {
+	var books []model.Book
+	if err := db.Find(&books).Error; err != nil {
+		return nil, fmt.Errorf("failed to fetch books: %w", err)
+	}
+
+	return books, nil
+}
+
+func GetBook(ctx context.Context, id uint) (*model.Book, error) {
+	var book model.Book
+	if err := db.First(&book, id).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, fmt.Errorf("book not found: %w", err)
+		}
+		return nil, fmt.Errorf("failed to fetch book: %w", err)
+	}
+
+	return &book, nil
+}
+
+func CreateBook(ctx context.Context, bookCreate *schemas.BookCreate) (*model.Book, error) {
+	if err := bookCreate.Validate(); err != nil {
+		return nil, fmt.Errorf("validation failed: %w", err)
+	}
+
+	book := model.NewBook(bookCreate.Title, bookCreate.Author, bookCreate.PublishedYear, bookCreate.Summary)
+	result := db.Create(&book)
+	if result.Error != nil {
+		return nil, fmt.Errorf("failed to create book: %w", result.Error)
+	}
+
+	return &book, nil
+}
+
+func UpdateBook(ctx context.Context, id uint, bookUpdate *schemas.BookUpdate) (*model.Book, error) {
+	if err := bookUpdate.Validate(); err != nil {
+		return nil, fmt.Errorf("validation failed: %w", err)
+	}
+
+	var book model.Book
+	if err := db.First(&book, id).Error; err != nil {
+		return nil, fmt.Errorf("failed to find book: %w", err)
+	}
+
+	book.Title = bookUpdate.Title
+	book.Author = bookUpdate.Author
+	book.PublishedYear = bookUpdate.PublishedYear
+	book.Summary = bookUpdate.Summary
+
+	result := db.Save(&book)
+	if result.Error != nil {
+		return nil, fmt.Errorf("failed to update book: %w", result.Error)
+	}
+
+	return &book, nil
+}
+
+func DeleteBook(ctx context.Context, id uint) error {
+	var book model.Book
+	if err := db.First(&book, id).Error; err != nil {
+		return fmt.Errorf("failed to find book: %w", err)
+	}
+
+	result := db.Delete(&book)
+	if result.Error != nil {
+		return fmt.Errorf("failed to delete book: %w", result.Error)
+	}
+
+	return nil
+}
+```
+
+```sql
+-- migrations/0001_init.up.sql
+CREATE TABLE IF NOT EXISTS "books" (
+    "id" SERIAL PRIMARY KEY,
+    "title" VARCHAR(255) NOT NULL,
+    "author" VARCHAR(255) NOT NULL,
+    "published_year" INTEGER NOT NULL,
+    "summary" TEXT
+);
+```
+
+```go
+// internal/migrations/migrations.go
+package migrations
 
 import (
-	"context"
-	"errors"
+	"embed"
 	"fmt"
-	"github.com/pressly/goose/v3"
-	_ "github.com/lib/pq"
 	"log"
+	"migrated-app/internal/database"
+	"os"
+	"path/filepath"
 )
 
-//go:embed migrations/*.sql
+//go:embed *.sql
 var migrations embed.FS
 
-func InitializeMigrations(ctx context.Context, db *sql.DB) error {
-	if err := goose.SetDialect("postgres"); err != nil {
-		log.Fatalf("Failed to set dialect: %v", err)
-		return err
+func RunMigrations(ctx context.Context) error {
+	migrationFiles, err := migrations.ReadDir(".")
+	if err != nil {
+		return fmt.Errorf("failed to read migration files: %w", err)
 	}
-	return goose.UpDB(db, migrations, "migrations")
+
+	for _, f := range migrationFiles {
+		if !f.IsDir() && filepath.Ext(f.Name()) == ".up.sql" {
+			data, err := migrations.ReadFile(f.Name())
+			if err != nil {
+				return fmt.Errorf("failed to read migration file %s: %w", f.Name(), err)
+			}
+
+			if _, err := database.GetAsyncDB().ExecContext(ctx, string(data)); err != nil {
+				return fmt.Errorf("failed to execute migration file %s: %w", f.Name(), err)
+			}
+		}
+	}
+
+	log.Println("Database migrations applied successfully.")
+	return nil
 }
