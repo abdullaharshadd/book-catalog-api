@@ -1,18 +1,16 @@
-import 'dotenv/config';
-import express from 'express';
-import { errorHandler } from './middleware/errorHandler';
+package main
 
-const app = express();
-app.use(express.json());
+import (
+	"log"
+	"net/http"
 
-// TODO: mount routers here
-// app.use('/api/users', userRouter);
+	"migrated-app/internal"
+)
 
-app.use(errorHandler);
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
-
-export default app;
+func main() {
+	mux := internal.BuildRouter()
+	log.Println("listening on :8080")
+	if err := http.ListenAndServe(":8080", mux); err != nil {
+		log.Fatal(err)
+	}
+}
